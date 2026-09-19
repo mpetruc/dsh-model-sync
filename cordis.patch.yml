@@ -1,0 +1,6 @@
+- insert:
+    - id: model-sync
+      name: dsh-model-sync
+      config:
+        # Sync once at boot (0) or repeat every N minutes; 0 = once.
+        intervalMinutes: 0
