@@ -4,3 +4,6 @@
       config:
         # Sync once at boot (0) or repeat every N minutes; 0 = once.
         intervalMinutes: 0
+        # Remove auto-added ids that are no longer advertised. Never prunes
+        # hand-entered entries; see README for the full semantics.
+        prune: false
