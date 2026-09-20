@@ -39,6 +39,10 @@ function harness(section, models) {
           store.set(ns, { ...(store.get(ns) ?? {}), ...patch })
           calls.update += 1
         },
+        replace: async (section) => {
+          store.set(ns, section)
+          calls.update += 1
+        },
       }
     },
     get: (ns) => store.get(ns),
@@ -143,6 +147,7 @@ test('positive intervalMinutes also repeats the pass with an interval trigger', 
   apply(h.context, { intervalMinutes: 5 })
   await mock.timers.tick(ACTIVATION_DELAY_MS)
   await flush()
+  const at = h.store.get('model-sync').lastSync.at
   await mock.timers.tick(5 * 60_000)
   await flush()
 
@@ -153,6 +158,8 @@ test('positive intervalMinutes also repeats the pass with an interval trigger', 
   const summaries = h.calls.logs.filter((entry) =>
     entry[0] === '[dsh-model-sync] %s summary: %s')
   assert.equal(summaries.length, 1, 'only the activation pass prints a summary')
+  assert.equal(h.calls.update, 1, 'only the activation pass persists an outcome')
+  assert.equal(h.store.get('model-sync').lastSync.at, at, 'interval passes leave the persisted outcome untouched')
   h.dispose()
 })
 
@@ -171,6 +178,9 @@ test('activation summary lists the model ids the pass added', async (t) => {
     entry[0] === '[dsh-model-sync] %s summary: %s'
     && entry[1] === 'activation'
     && entry[2] === 'p1: +2 models: a, b'))
+  const provenance = h.store.get('model-sync')
+  assert.equal(typeof provenance.lastSync.at, 'string')
+  assert.deepEqual(provenance.lastSync.providers.p1, { added: ['a', 'b'], deleted: [] })
   h.dispose()
 })
 
@@ -190,6 +200,7 @@ test('activation summary reports no models added or removed for an unchanged pro
     entry[0] === '[dsh-model-sync] %s summary: %s'
     && entry[1] === 'activation'
     && entry[2] === 'p1: no models added or removed'))
+  assert.deepEqual(h.store.get('model-sync').lastSync.providers.p1, { added: [], deleted: [] })
   h.dispose()
 })
 
@@ -218,6 +229,7 @@ test('activation summary lists pruned ids when prune removed them', async (t) =>
     entry[0] === '[dsh-model-sync] %s summary: %s'
     && entry[1] === 'activation'
     && entry[2] === 'p1: -1 model: gone'))
+  assert.deepEqual(h.store.get('model-sync').lastSync.providers.p1, { added: [], deleted: ['gone'] })
   h.dispose()
 })
 
@@ -280,6 +292,7 @@ test('activation with no configured providers logs nothing-to-sync and writes no
 
   assert.equal(h.calls.discover, 0, 'no discovery without a section')
   assert.equal(h.calls.replace, 0)
+  assert.equal(h.calls.update, 0, 'no outcome persisted without providers')
   assert.ok(h.calls.logs.some((entry) =>
     entry[0] === '[dsh-model-sync] %s sync: no llm-pi-ai providers configured; nothing to sync'
     && entry[1] === 'activation'))

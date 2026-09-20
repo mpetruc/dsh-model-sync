@@ -21,7 +21,8 @@
  * positive `intervalMinutes` additionally repeats the pass on that cadence.
  * Each activation pass also logs a per-provider outcome summary: the model
  * ids it added or pruned, or `no models added or removed` when nothing
- * changed.
+ * changed, and persists that outcome in the `model-sync` settings namespace
+ * (`lastSync`) for the bundle's Plugins page, which shows it live.
  *
  * Sync rules
  * - Adds: advertised ids that are not configured are appended with
@@ -58,11 +59,22 @@ const PROVENANCE_NS = 'model-sync'
 /** Entry marker value for ids this plugin auto-added. */
 const OWNER = 'model-sync'
 
-/** Rejection section schema: bare id lists, nothing else. */
+/**
+ * Namespace schema: bare rejection id lists, plus the last activation pass'
+ * outcome (`lastSync`) the bundle's Plugins page displays. Never a duplicate
+ * of the models array — ids only, refreshed every activation pass.
+ */
 const PROVENANCE_SCHEMA = z.object({
   providers: z.dict(z.object({
     rejected: z.array(z.string()).default([]),
   })).default({}),
+  lastSync: z.object({
+    at: z.string(),
+    providers: z.dict(z.object({
+      added: z.array(z.string()).default([]),
+      deleted: z.array(z.string()).default([]),
+    })).default({}),
+  }).required(false),
 })
 
 /** Settle grace before the activation sync (boot or manual re-enable). */
@@ -167,6 +179,7 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
     : {}
   const notes = []
   const summaries = []
+  const lastSyncProviders = {}
   let modelsChanged = false
   let provenanceChanged = false
   for (const [name, profile] of Object.entries(section.providers)) {
@@ -252,6 +265,7 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
     if (added.length > 0) parts.push(`+${added.length} ${countLabel(added.length)}: ${added.join(', ')}`)
     if (deleted.length > 0) parts.push(`-${deleted.length} ${countLabel(deleted.length)}: ${deleted.join(', ')}`)
     summaries.push(parts.length > 0 ? `${name}: ${parts.join('; ')}` : `${name}: no models added or removed`)
+    lastSyncProviders[name] = { added, deleted }
     // Baseline for the next sync = the owned set as it stands AFTER this
     // sync's prune/add, so ids added now are tracked from the next run on.
     lastOwned.set(name, new Set(existing.filter(isOwned).map(model => model.id)))
@@ -260,10 +274,22 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
   if (reason === 'activation' && summaries.length > 0) {
     ctx.logger.info('[dsh-model-sync] %s summary: %s', reason, summaries.join('; '))
   }
+  // Persist the activation outcome for the bundle's Plugins page; interval
+  // passes keep their per-pass notes in the log only.
+  const lastSync = reason === 'activation' && summaries.length > 0
+    ? { at: new Date().toISOString(), providers: lastSyncProviders }
+    : undefined
   if (modelsChanged) {
     await settings.replace(SETTINGS_NS, work)
   }
-  if (provenanceChanged) {
-    await scope.update({ providers: providerState })
+  // Wholesale write: `providers` is the complete map, and `lastSync` either
+  // replaces the previous outcome or (interval-only runs) is carried over.
+  if (provenanceChanged || lastSync !== undefined) {
+    await scope.replace({
+      providers: providerState,
+      ...(lastSync === undefined
+        ? (provenance.lastSync === undefined ? {} : { lastSync: provenance.lastSync })
+        : { lastSync }),
+    })
   }
 }

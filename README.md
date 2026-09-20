@@ -21,6 +21,14 @@ Each activation pass also logs an outcome summary per provider:
 (or pruned, with `prune: true`), or `no models added or removed` when a
 provider changed nothing. Interval passes print no summary.
 
+The same outcome is persisted in the `model-sync` settings namespace
+(`lastSync`) and rendered right on the bundle's Plugins page: open the
+`dsh-model-sync` card and a **Last sync** panel sits between the description
+and the Components list, showing the run time and one line per provider —
+the added/deleted id lists, or `no models added or removed`. The panel
+follows the settings document, so it refreshes by itself ~1.5 s after the
+re-enable that triggered the pass.
+
 ## Sync rules
 
 - **Adds** — discovered ids that are not configured yet are appended with an

@@ -37,6 +37,10 @@ function harness(section, discover) {
           store.set(ns, { ...(store.get(ns) ?? {}), ...patch })
           calls.update += 1
         },
+        replace: async (section) => {
+          store.set(ns, section)
+          calls.update += 1
+        },
       }
     },
     get: (ns) => store.get(ns),
@@ -176,9 +180,10 @@ test('re-enable resets the deletion baseline: a deleted owned id is re-added, no
   const ids = models.map((model) => model.id)
   assert.ok(ids.includes('a'), 'deleted id is re-added after a fresh activation')
   assert.equal(ids.length, 2)
-  // Fresh baseline means no rejection memory was written for this provider.
+  // Fresh baseline means no rejection memory was written for this provider;
+  // the namespace carries only the lastSync outcome for the UI.
   const provenance = h.store.get('model-sync')
-  assert.equal(provenance, undefined, 'no rejection namespace written on a fresh activation')
+  assert.deepEqual(provenance.providers, {}, 'no rejection memory on a fresh activation')
   h.dispose()
 })
 
