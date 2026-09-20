@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-sync",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "exports": {
     ".": "./index.js"
@@ -22,6 +22,9 @@
     "discovery"
   ],
   "license": "MIT",
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test"
+  },
   "engines": {
     "node": ">=18"
   },

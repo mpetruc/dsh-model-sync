@@ -15,6 +15,12 @@
  * survive every write path (schemastery objects are open, and both the UI
  * and this plugin spread entries rather than rebuild them).
  *
+ * Manual sync: every activation of the plugin — the first boot or a manual
+ * re-enable of the `model-sync` row in the Settings → Plugins surface — runs
+ * one sync pass, so toggling the row off and back on refreshes the model
+ * lists on demand. A positive `intervalMinutes` additionally repeats the pass
+ * on that cadence.
+ *
  * Sync rules
  * - Adds: advertised ids that are not configured are appended with
  *   `owner: 'model-sync'` (plus name / contextWindow / maxTokens / input
@@ -30,8 +36,8 @@
  *   in the namespace, never a duplicate of the models array. Manually
  *   re-adding a rejected id clears the rejection. Detection diffs consecutive
  *   syncs (in-memory baseline, refreshed at every run), so it stays live only
- *   with a positive `intervalMinutes`; with `intervalMinutes: 0` (the
- *   boot-time sync only) a deletion is re-added on the next boot's sync.
+ *   with a positive `intervalMinutes`; with `intervalMinutes: 0` (activation
+ *   sync only) a deletion is re-added at the next activation's sync.
  *
  * @module dsh-model-sync
  */
@@ -57,8 +63,8 @@ const PROVENANCE_SCHEMA = z.object({
   })).default({}),
 })
 
-/** Boot settle grace before the first sync. */
-const FIRST_SYNC_DELAY_MS = 1500
+/** Settle grace before the activation sync (boot or manual re-enable). */
+const ACTIVATION_SYNC_DELAY_MS = 1500
 
 /** Whether one configured model entry was auto-added by this plugin. */
 function isOwned(entry) {
@@ -95,11 +101,11 @@ export function apply(ctx, config = {}) {
   // diffing against this baseline is what detects a deliberate deletion.
   const lastOwned = new Map()
 
-  const syncOnce = async (scope) => {
+  const syncOnce = async (scope, reason) => {
     if (running) return
     running = true
     try {
-      await syncProviders(ctx, wanted, prune, scope, lastOwned)
+      await syncProviders(ctx, wanted, prune, scope, lastOwned, reason)
     } catch (error) {
       ctx.logger.warn('[dsh-model-sync] sync failed: %s',
         error instanceof Error ? error.message : String(error))
@@ -108,17 +114,18 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  // Run once services are up; the settings sections are fully composed then.
+  // Each activation — the first boot or a manual re-enable from the Plugins
+  // section of the UI — runs one sync once services are up.
   ctx.inject(['llm', 'settings'], (sctx) => {
     const scope = sctx.settings.register(PROVENANCE_NS, PROVENANCE_SCHEMA)
-    const run = () => syncOnce(scope)
+    const run = (reason) => syncOnce(scope, reason)
     const first = sctx.effect(() => {
-      const timer = setTimeout(run, FIRST_SYNC_DELAY_MS)
+      const timer = setTimeout(() => run('activation'), ACTIVATION_SYNC_DELAY_MS)
       return () => clearTimeout(timer)
     })
     const repeat = intervalMinutes > 0
       ? sctx.effect(() => {
-        const timer = setInterval(run, intervalMinutes * 60_000)
+        const timer = setInterval(() => run('interval'), intervalMinutes * 60_000)
         return () => clearInterval(timer)
       })
       : undefined
@@ -135,14 +142,15 @@ export function apply(ctx, config = {}) {
  * @param prune - whether to remove owned ids no longer advertised.
  * @param scope - the model-sync rejection namespace scope.
  * @param lastOwned - owned ids seen at the previous sync, per provider.
+ * @param reason - which trigger ran this pass ('activation' | 'interval').
  */
-async function syncProviders(ctx, wanted, prune, scope, lastOwned) {
+async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
   const llm = ctx.get('llm')
   const settings = ctx.get('settings')
   const section = settings.get(SETTINGS_NS)
   if (typeof section !== 'object' || section === null
     || typeof section.providers !== 'object' || section.providers === null) {
-    ctx.logger.info('[dsh-model-sync] no llm-pi-ai providers configured; nothing to sync')
+    ctx.logger.info('[dsh-model-sync] %s sync: no llm-pi-ai providers configured; nothing to sync', reason)
     return
   }
   const work = structuredClone(section)
@@ -230,7 +238,7 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned) {
     // sync's prune/add, so ids added now are tracked from the next run on.
     lastOwned.set(name, new Set(existing.filter(isOwned).map(model => model.id)))
   }
-  if (notes.length > 0) ctx.logger.info('[dsh-model-sync] %s', notes.join('; '))
+  if (notes.length > 0) ctx.logger.info('[dsh-model-sync] %s sync: %s', reason, notes.join('; '))
   if (modelsChanged) {
     await settings.replace(SETTINGS_NS, work)
   }

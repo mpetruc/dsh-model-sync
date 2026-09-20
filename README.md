@@ -6,6 +6,15 @@ model list without hand-entry. Discovery goes through the llm service's
 `discoverModels('llm-pi-ai', …)` — `GET {baseURL}/models` for
 OpenAI-compatible routes, the installed catalog for catalog routes.
 
+## Manual sync
+
+Every activation of the plugin runs one sync pass: the first boot, and any
+manual re-enable from Settings → Plugins. To refresh the model lists on
+demand, disable the `model-sync` row and enable it again — the re-enable
+restarts the plugin, so the pass runs ~1.5 s later and re-reads every
+provider's advertised list. A sync that finds nothing new leaves the section
+untouched; only actual changes reach the Settings file.
+
 ## Sync rules
 
 - **Adds** — discovered ids that are not configured yet are appended with an
@@ -18,7 +27,11 @@ OpenAI-compatible routes, the installed catalog for catalog routes.
 - **Rejected** — when an owned id that is still advertised disappears between
   two syncs, it is treated as a deliberate deletion, remembered in the
   `model-sync` settings namespace, and not re-added. Manually re-adding a
-  rejected id clears the rejection.
+  rejected id clears the rejection. Detection diffs *consecutive* syncs within
+  one activation, so a manual re-enable never triggers it — the re-enable
+  resets the in-memory baseline, and a single activation sync re-adds a
+  deleted id. Deletion detection stays live only with a positive
+  `intervalMinutes`.
 
 Provenance for pruning rides on the per-entry `owner` marker (single source —
 no duplicated model list). Only the small per-provider `rejected` id lists
@@ -35,17 +48,22 @@ The bundle inserts a `model-sync` row:
 - id: model-sync
   name: dsh-model-sync
   config:
-    intervalMinutes: 0   # 0 = once at boot; N = also repeat every N minutes
+    intervalMinutes: 0   # 0 = once per activation (boot or re-enable);
+                         # N = also repeat every N minutes
     #     NB: a positive interval also enables deletion detection (rejected)
     prune: false         # true = remove auto-added ids no longer advertised
     # providers: [amd-server]   # optional: restrict which providers to sync
 ```
 
-The first sync runs ~1.5 s after the `llm`/`settings` services are ready; a
-positive `intervalMinutes` repeats it on that cadence. Namespaces are written
-only when something changed.
+Every activation — first boot or a manual re-enable from Settings → Plugins —
+runs one sync ~1.5 s after the `llm`/`settings` services are ready; a positive
+`intervalMinutes` repeats it on that cadence. Namespaces are written only when
+something changed.
 
 ## Notes
 
 - A provider whose endpoint is down is skipped with a warning; a discovery
   error never fails the row.
+- Every pass logs its trigger — `[dsh-model-sync] activation sync: …` for
+  boot/re-enable, `… interval sync: …` for the repeating timer — so a manual
+  toggle is visible in the host log.
