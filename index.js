@@ -10,24 +10,28 @@
  * dropdown reading that section then show the provider's full model list
  * without hand-entry.
  *
- * Sync rules
- * - Adds: discovered ids that are not configured yet are appended (with
- *   name / contextWindow / maxTokens / input metadata when the listing
- *   reports them). Existing entries are never rewritten.
- * - Prune (config `prune: true`): ids the plugin previously auto-added and
- *   that are no longer advertised are removed. Hand-entered entries are
- *   never pruned.
- * - Rejected: when a tracked id that is still advertised disappears from
- *   the configured list, the plugin treats it as a deliberate deletion,
- *   records it, and does not re-add it. Manually re-adding a rejected id
- *   clears the rejection. Untracked (pre-existing) entries are always
- *   re-added while advertised.
+ * Provenance is a per-entry `owner` marker: entries the plugin auto-added
+ * carry `owner: 'model-sync'`; hand-entered entries omit the key. Markers
+ * survive every write path (schemastery objects are open, and both the UI
+ * and this plugin spread entries rather than rebuild them).
  *
- * Provenance — which ids were auto-added — lives in the `model-sync`
- * settings namespace: `providers.<name>.added` / `.rejected`. Entries
- * configured before this version never had provenance and are treated as
- * hand-entered; deleting them and letting the plugin rebuild the list gives
- * every entry full tracking.
+ * Sync rules
+ * - Adds: advertised ids that are not configured are appended with
+ *   `owner: 'model-sync'` (plus name / contextWindow / maxTokens / input
+ *   metadata when the listing reports it).
+ * - Prune (config `prune: true`): entries owned by the plugin whose id is no
+ *   longer advertised are removed. Hand-entered entries are never pruned.
+ * - Rejected: when an owned id that is still advertised disappears between
+ *   two consecutive syncs, the plugin treats it as a deliberate deletion and
+ *   remembers it in the `model-sync` settings namespace so it is not
+ *   re-added. The owner marker cannot remember a deleted entry — the entry
+ *   is gone — so detection diffs the previous sync's owned ids (an in-memory
+ *   baseline) against the current section, and only these bare id lists live
+ *   in the namespace, never a duplicate of the models array. Manually
+ *   re-adding a rejected id clears the rejection. Detection diffs consecutive
+ *   syncs (in-memory baseline, refreshed at every run), so it stays live only
+ *   with a positive `intervalMinutes`; with `intervalMinutes: 0` (the
+ *   boot-time sync only) a deletion is re-added on the next boot's sync.
  *
  * @module dsh-model-sync
  */
@@ -40,13 +44,15 @@ const SETTINGS_NS = 'llm-pi-ai'
 /** Namespace whose registered model discovery serves drafts. */
 const DISCOVERY_NS = 'llm-pi-ai'
 
-/** Namespace holding auto-add provenance per provider. */
+/** Namespace holding rejection memory per provider. */
 const PROVENANCE_NS = 'model-sync'
 
-/** Provenance section schema: one entry per provider, ids only. */
+/** Entry marker value for ids this plugin auto-added. */
+const OWNER = 'model-sync'
+
+/** Rejection section schema: bare id lists, nothing else. */
 const PROVENANCE_SCHEMA = z.object({
   providers: z.dict(z.object({
-    added: z.array(z.string()).default([]),
     rejected: z.array(z.string()).default([]),
   })).default({}),
 })
@@ -54,9 +60,14 @@ const PROVENANCE_SCHEMA = z.object({
 /** Boot settle grace before the first sync. */
 const FIRST_SYNC_DELAY_MS = 1500
 
+/** Whether one configured model entry was auto-added by this plugin. */
+function isOwned(entry) {
+  return entry.owner === OWNER
+}
+
 /** Build the settings `models` entry for one discovered model. */
 function toEntry(model) {
-  const entry = { id: model.id }
+  const entry = { id: model.id, owner: OWNER }
   if (typeof model.name === 'string' && model.name.length > 0) entry.name = model.name
   if (typeof model.contextWindow === 'number') entry.contextWindow = model.contextWindow
   if (typeof model.maxTokens === 'number') entry.maxTokens = model.maxTokens
@@ -79,12 +90,16 @@ export function apply(ctx, config = {}) {
     ? new Set(config.providers)
     : null
   let running = false
+  // Owned ids observed at the previous sync, per provider. The `owner` marker
+  // lives on entries, so a deleted entry is invisible to the current section;
+  // diffing against this baseline is what detects a deliberate deletion.
+  const lastOwned = new Map()
 
   const syncOnce = async (scope) => {
     if (running) return
     running = true
     try {
-      await syncProviders(ctx, wanted, prune, scope)
+      await syncProviders(ctx, wanted, prune, scope, lastOwned)
     } catch (error) {
       ctx.logger.warn('[dsh-model-sync] sync failed: %s',
         error instanceof Error ? error.message : String(error))
@@ -117,10 +132,11 @@ export function apply(ctx, config = {}) {
  * their section actually changed.
  * @param ctx - host context carrying llm / settings services.
  * @param wanted - provider name filter, or null for every provider.
- * @param prune - whether to remove auto-added ids no longer advertised.
- * @param scope - the model-sync provenance namespace scope.
+ * @param prune - whether to remove owned ids no longer advertised.
+ * @param scope - the model-sync rejection namespace scope.
+ * @param lastOwned - owned ids seen at the previous sync, per provider.
  */
-async function syncProviders(ctx, wanted, prune, scope) {
+async function syncProviders(ctx, wanted, prune, scope, lastOwned) {
   const llm = ctx.get('llm')
   const settings = ctx.get('settings')
   const section = settings.get(SETTINGS_NS)
@@ -162,32 +178,34 @@ async function syncProviders(ctx, wanted, prune, scope) {
       : []
     const existingIds = new Set(existing.map(model => model.id))
     const discoveredIds = new Set(discovered.map(model => model.id))
-    const state = providerState[name] ?? { added: [], rejected: [] }
+    const ownedNow = new Set(existing.filter(isOwned).map(model => model.id))
+    const state = providerState[name] ?? { rejected: [] }
     let stateChanged = false
 
-    // Track deliberate deletions: a tracked id that is still advertised but
-    // no longer configured was removed by hand — remember not to re-add it.
-    for (const id of state.added) {
-      if (!existingIds.has(id) && discoveredIds.has(id) && !state.rejected.includes(id)) {
+    // Track deliberate deletions via the baseline: an id owned at the
+    // previous sync that is gone now, while still advertised, was removed by
+    // hand — remember not to re-add it. A vanished id is not advertised, so a
+    // prune never lands here.
+    for (const id of lastOwned.get(name) ?? []) {
+      if (!ownedNow.has(id) && discoveredIds.has(id) && !state.rejected.includes(id)) {
         state.rejected.push(id)
         stateChanged = true
       }
     }
 
-    // Forget rejections the user manually re-added.
+    // Forget rejections the user manually re-added (the id is configured
+    // again, so its rejection no longer means anything).
     const rejectionCount = state.rejected.length
-    state.rejected = state.rejected.filter(id => existingIds.has(id))
+    state.rejected = state.rejected.filter(id => !existingIds.has(id))
     if (state.rejected.length !== rejectionCount) stateChanged = true
 
-    // Prune tracked ids that vanished from the listing (opt-in).
+    // Prune owned entries that vanished from the listing (opt-in).
     if (prune) {
-      const removals = state.added.filter(id => existingIds.has(id) && !discoveredIds.has(id))
+      const removals = existing.filter(model => isOwned(model) && !discoveredIds.has(model.id))
       if (removals.length > 0) {
-        existing = existing.filter(model => !removals.includes(model.id))
-        state.added = state.added.filter(id => !removals.includes(id))
+        existing = existing.filter(model => !removals.includes(model))
         modelsChanged = true
-        stateChanged = true
-        notes.push(`${name}: pruned ${removals.length} (${removals.join(', ')})`)
+        notes.push(`${name}: pruned ${removals.length} (${removals.map(model => model.id).join(', ')})`)
       }
     }
 
@@ -195,23 +213,22 @@ async function syncProviders(ctx, wanted, prune, scope) {
     const fresh = discovered.filter(model => !existingIds.has(model.id) && !state.rejected.includes(model.id))
     if (fresh.length > 0) {
       existing = [...existing, ...fresh.map(toEntry)]
-      for (const model of fresh) {
-        if (!state.added.includes(model.id)) state.added.push(model.id)
-      }
       modelsChanged = true
-      stateChanged = true
       notes.push(`${name}: +${fresh.length} models (${existing.length - fresh.length} → ${existing.length})`)
     } else {
       notes.push(`${name}: up to date (${existing.length} models)`)
     }
 
     if (stateChanged) {
-      providerState[name] = { added: state.added, rejected: state.rejected }
+      providerState[name] = { rejected: state.rejected }
       provenanceChanged = true
     }
     if (modelsChanged && Array.isArray(profile.models)) {
       work.providers[name] = { ...profile, models: existing }
     }
+    // Baseline for the next sync = the owned set as it stands AFTER this
+    // sync's prune/add, so ids added now are tracked from the next run on.
+    lastOwned.set(name, new Set(existing.filter(isOwned).map(model => model.id)))
   }
   if (notes.length > 0) ctx.logger.info('[dsh-model-sync] %s', notes.join('; '))
   if (modelsChanged) {
