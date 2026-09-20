@@ -127,7 +127,8 @@ test('re-enable after disable runs a fresh activation sync (manual toggle)', asy
   const models = h.store.get('llm-pi-ai').providers.p1.models
   assert.deepEqual(models.map((model) => model.id), ['a'])
   assert.equal(models[0].owner, 'model-sync')
-  const activations = h.calls.logs.filter((entry) => entry[1] === 'activation')
+  const activations = h.calls.logs.filter((entry) =>
+    entry[0] === '[dsh-model-sync] %s sync: %s' && entry[1] === 'activation')
   assert.equal(activations.length, 2)
   h.dispose()
 })
@@ -149,6 +150,74 @@ test('positive intervalMinutes also repeats the pass with an interval trigger', 
   assert.equal(h.calls.replace, 1, 'an up-to-date pass writes nothing')
   assert.ok(h.calls.logs.some((entry) =>
     entry[0] === '[dsh-model-sync] %s sync: %s' && entry[1] === 'interval'))
+  const summaries = h.calls.logs.filter((entry) =>
+    entry[0] === '[dsh-model-sync] %s summary: %s')
+  assert.equal(summaries.length, 1, 'only the activation pass prints a summary')
+  h.dispose()
+})
+
+test('activation summary lists the model ids the pass added', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+  t.after(() => mock.timers.reset())
+  const h = harness(
+    { providers: { p1: { baseURL: 'http://x/v1', models: [] } } },
+    [{ id: 'a' }, { id: 'b' }],
+  )
+  apply(h.context, { intervalMinutes: 0 })
+  await mock.timers.tick(ACTIVATION_DELAY_MS)
+  await flush()
+
+  assert.ok(h.calls.logs.some((entry) =>
+    entry[0] === '[dsh-model-sync] %s summary: %s'
+    && entry[1] === 'activation'
+    && entry[2] === 'p1: +2 models: a, b'))
+  h.dispose()
+})
+
+test('activation summary reports no models added or removed for an unchanged provider', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+  t.after(() => mock.timers.reset())
+  const h = harness(
+    { providers: { p1: { baseURL: 'http://x/v1', models: [{ id: 'a', owner: 'model-sync' }] } } },
+    [{ id: 'a' }],
+  )
+  apply(h.context, { intervalMinutes: 0 })
+  await mock.timers.tick(ACTIVATION_DELAY_MS)
+  await flush()
+
+  assert.equal(h.calls.replace, 0)
+  assert.ok(h.calls.logs.some((entry) =>
+    entry[0] === '[dsh-model-sync] %s summary: %s'
+    && entry[1] === 'activation'
+    && entry[2] === 'p1: no models added or removed'))
+  h.dispose()
+})
+
+test('activation summary lists pruned ids when prune removed them', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+  t.after(() => mock.timers.reset())
+  const h = harness(
+    {
+      providers: {
+        p1: {
+          baseURL: 'http://x/v1',
+          models: [
+            { id: 'a', owner: 'model-sync' },
+            { id: 'gone', owner: 'model-sync' },
+          ],
+        },
+      },
+    },
+    [{ id: 'a' }],
+  )
+  apply(h.context, { intervalMinutes: 0, prune: true })
+  await mock.timers.tick(ACTIVATION_DELAY_MS)
+  await flush()
+
+  assert.ok(h.calls.logs.some((entry) =>
+    entry[0] === '[dsh-model-sync] %s summary: %s'
+    && entry[1] === 'activation'
+    && entry[2] === 'p1: -1 model: gone'))
   h.dispose()
 })
 

@@ -19,6 +19,9 @@
  * re-enable of the `model-sync` row on the Plugins page — runs one sync pass,
  * so toggling the row off and back on refreshes the model lists on demand. A
  * positive `intervalMinutes` additionally repeats the pass on that cadence.
+ * Each activation pass also logs a per-provider outcome summary: the model
+ * ids it added or pruned, or `no models added or removed` when nothing
+ * changed.
  *
  * Sync rules
  * - Adds: advertised ids that are not configured are appended with
@@ -68,6 +71,11 @@ const ACTIVATION_SYNC_DELAY_MS = 1500
 /** Whether one configured model entry was auto-added by this plugin. */
 function isOwned(entry) {
   return entry.owner === OWNER
+}
+
+/** "model" or "models" for the outcome summary, by count. */
+function countLabel(count) {
+  return count === 1 ? 'model' : 'models'
 }
 
 /** Build the settings `models` entry for one discovered model. */
@@ -158,6 +166,7 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
     ? provenance.providers
     : {}
   const notes = []
+  const summaries = []
   let modelsChanged = false
   let provenanceChanged = false
   for (const [name, profile] of Object.entries(section.providers)) {
@@ -188,6 +197,9 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
     const ownedNow = new Set(existing.filter(isOwned).map(model => model.id))
     const state = providerState[name] ?? { rejected: [] }
     let stateChanged = false
+    // Model ids this pass appended or pruned, for the activation summary.
+    const added = []
+    const deleted = []
 
     // Track deliberate deletions via the baseline: an id owned at the
     // previous sync that is gone now, while still advertised, was removed by
@@ -212,6 +224,7 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
       if (removals.length > 0) {
         existing = existing.filter(model => !removals.includes(model))
         modelsChanged = true
+        deleted.push(...removals.map(model => model.id))
         notes.push(`${name}: pruned ${removals.length} (${removals.map(model => model.id).join(', ')})`)
       }
     }
@@ -221,6 +234,7 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
     if (fresh.length > 0) {
       existing = [...existing, ...fresh.map(toEntry)]
       modelsChanged = true
+      added.push(...fresh.map(model => model.id))
       notes.push(`${name}: +${fresh.length} models (${existing.length - fresh.length} → ${existing.length})`)
     } else {
       notes.push(`${name}: up to date (${existing.length} models)`)
@@ -233,11 +247,19 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
     if (modelsChanged && Array.isArray(profile.models)) {
       work.providers[name] = { ...profile, models: existing }
     }
+    // Outcome summary for this provider, printed once per activation pass.
+    const parts = []
+    if (added.length > 0) parts.push(`+${added.length} ${countLabel(added.length)}: ${added.join(', ')}`)
+    if (deleted.length > 0) parts.push(`-${deleted.length} ${countLabel(deleted.length)}: ${deleted.join(', ')}`)
+    summaries.push(parts.length > 0 ? `${name}: ${parts.join('; ')}` : `${name}: no models added or removed`)
     // Baseline for the next sync = the owned set as it stands AFTER this
     // sync's prune/add, so ids added now are tracked from the next run on.
     lastOwned.set(name, new Set(existing.filter(isOwned).map(model => model.id)))
   }
   if (notes.length > 0) ctx.logger.info('[dsh-model-sync] %s sync: %s', reason, notes.join('; '))
+  if (reason === 'activation' && summaries.length > 0) {
+    ctx.logger.info('[dsh-model-sync] %s summary: %s', reason, summaries.join('; '))
+  }
   if (modelsChanged) {
     await settings.replace(SETTINGS_NS, work)
   }

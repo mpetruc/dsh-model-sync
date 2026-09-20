@@ -16,6 +16,11 @@ plugin, so the pass runs ~1.5 s later and re-reads every provider's
 advertised list. The settings section is written only when a sync changed at
 least one provider's models.
 
+Each activation pass also logs an outcome summary per provider:
+`[dsh-model-sync] activation summary: …` lists the model ids the pass added
+(or pruned, with `prune: true`), or `no models added or removed` when a
+provider changed nothing. Interval passes print no summary.
+
 ## Sync rules
 
 - **Adds** — discovered ids that are not configured yet are appended with an
@@ -66,7 +71,8 @@ runs one sync ~1.5 s after the `llm`/`settings` services are ready; a positive
   error never fails the row.
 - Every pass logs its trigger — `[dsh-model-sync] activation sync: …` for
   boot/re-enable, `… interval sync: …` for the repeating timer — so a manual
-  toggle is visible in the host log.
+  toggle is visible in the host log. Activation passes add an outcome summary
+  line, `[dsh-model-sync] activation summary: …`.
 - `npm test` (node:test fake timers) needs Node ≥ 20.4, and ≥ 21.3 to silence
   the `--disable-warning` flag; the plugin itself only requires `engines`'s
   `>=18`.
