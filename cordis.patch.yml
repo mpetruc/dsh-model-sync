@@ -2,8 +2,9 @@
     - id: model-sync
       name: dsh-model-sync
       config:
-        # Manual on-demand sync: toggle this row off and on in Settings →
-        # Plugins; each re-enable runs one sync pass.
+        # Manual on-demand sync: open the Plugins page, expand the
+        # dsh-model-sync card, and toggle this row off and on; each re-enable
+        # runs one sync pass.
         # Repeat every N minutes (0 = once per activation, boot or re-enable).
         intervalMinutes: 0
         # Remove auto-added ids that are no longer advertised. Never prunes

@@ -16,10 +16,9 @@
  * and this plugin spread entries rather than rebuild them).
  *
  * Manual sync: every activation of the plugin — the first boot or a manual
- * re-enable of the `model-sync` row in the Settings → Plugins surface — runs
- * one sync pass, so toggling the row off and back on refreshes the model
- * lists on demand. A positive `intervalMinutes` additionally repeats the pass
- * on that cadence.
+ * re-enable of the `model-sync` row on the Plugins page — runs one sync pass,
+ * so toggling the row off and back on refreshes the model lists on demand. A
+ * positive `intervalMinutes` additionally repeats the pass on that cadence.
  *
  * Sync rules
  * - Adds: advertised ids that are not configured are appended with
@@ -107,7 +106,7 @@ export function apply(ctx, config = {}) {
     try {
       await syncProviders(ctx, wanted, prune, scope, lastOwned, reason)
     } catch (error) {
-      ctx.logger.warn('[dsh-model-sync] sync failed: %s',
+      ctx.logger.warn('[dsh-model-sync] %s sync failed: %s', reason,
         error instanceof Error ? error.message : String(error))
     } finally {
       running = false
@@ -115,7 +114,7 @@ export function apply(ctx, config = {}) {
   }
 
   // Each activation — the first boot or a manual re-enable from the Plugins
-  // section of the UI — runs one sync once services are up.
+  // page — runs one sync once services are up.
   ctx.inject(['llm', 'settings'], (sctx) => {
     const scope = sctx.settings.register(PROVENANCE_NS, PROVENANCE_SCHEMA)
     const run = (reason) => syncOnce(scope, reason)

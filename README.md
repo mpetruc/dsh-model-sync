@@ -9,11 +9,12 @@ OpenAI-compatible routes, the installed catalog for catalog routes.
 ## Manual sync
 
 Every activation of the plugin runs one sync pass: the first boot, and any
-manual re-enable from Settings → Plugins. To refresh the model lists on
-demand, disable the `model-sync` row and enable it again — the re-enable
-restarts the plugin, so the pass runs ~1.5 s later and re-reads every
-provider's advertised list. A sync that finds nothing new leaves the section
-untouched; only actual changes reach the Settings file.
+manual re-enable. To refresh the model lists on demand, open the Plugins page
+(sidebar → Plugins), expand the `dsh-model-sync` card, and flick the
+`model-sync` row's switch off, then on again — the re-enable restarts the
+plugin, so the pass runs ~1.5 s later and re-reads every provider's
+advertised list. The settings section is written only when a sync changed at
+least one provider's models.
 
 ## Sync rules
 
@@ -55,10 +56,9 @@ The bundle inserts a `model-sync` row:
     # providers: [amd-server]   # optional: restrict which providers to sync
 ```
 
-Every activation — first boot or a manual re-enable from Settings → Plugins —
+Every activation — first boot or a manual re-enable from the Plugins page —
 runs one sync ~1.5 s after the `llm`/`settings` services are ready; a positive
-`intervalMinutes` repeats it on that cadence. Namespaces are written only when
-something changed.
+`intervalMinutes` repeats it on that cadence.
 
 ## Notes
 
@@ -67,3 +67,6 @@ something changed.
 - Every pass logs its trigger — `[dsh-model-sync] activation sync: …` for
   boot/re-enable, `… interval sync: …` for the repeating timer — so a manual
   toggle is visible in the host log.
+- `npm test` (node:test fake timers) needs Node ≥ 20.4, and ≥ 21.3 to silence
+  the `--disable-warning` flag; the plugin itself only requires `engines`'s
+  `>=18`.
