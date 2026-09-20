@@ -146,7 +146,73 @@ test('positive intervalMinutes also repeats the pass with an interval trigger', 
   await flush()
 
   assert.equal(h.calls.discover, 2)
+  assert.equal(h.calls.replace, 1, 'an up-to-date pass writes nothing')
   assert.ok(h.calls.logs.some((entry) =>
     entry[0] === '[dsh-model-sync] %s sync: %s' && entry[1] === 'interval'))
+  h.dispose()
+})
+
+test('persisted rejections survive a re-enable: a rejected id is not re-added', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+  t.after(() => mock.timers.reset())
+  const h = harness(
+    { providers: { p1: { baseURL: 'http://x/v1', models: [] } } },
+    [{ id: 'a' }],
+  )
+  // A rejection recorded by an earlier interval-based detection lives in the
+  // persisted namespace; only the in-memory baseline resets on re-enable.
+  h.store.set('model-sync', { providers: { p1: { rejected: ['a'] } } })
+  apply(h.context, { intervalMinutes: 0 })
+  await mock.timers.tick(ACTIVATION_DELAY_MS)
+  await flush()
+
+  const models = h.store.get('llm-pi-ai').providers.p1.models
+  assert.deepEqual(models.map((model) => model.id), [], 'rejected id stays out')
+  assert.equal(h.calls.replace, 0)
+  h.dispose()
+})
+
+test('prune removes owned ids that vanished from the listing, never hand-entered ones', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+  t.after(() => mock.timers.reset())
+  const h = harness(
+    {
+      providers: {
+        p1: {
+          baseURL: 'http://x/v1',
+          models: [
+            { id: 'a', owner: 'model-sync' },
+            { id: 'gone', owner: 'model-sync' },
+            { id: 'hand', name: 'Hand-entered' },
+          ],
+        },
+      },
+    },
+    [{ id: 'a' }],
+  )
+  apply(h.context, { intervalMinutes: 0, prune: true })
+  await mock.timers.tick(ACTIVATION_DELAY_MS)
+  await flush()
+
+  const models = h.store.get('llm-pi-ai').providers.p1.models
+  assert.deepEqual(models.map((model) => model.id), ['a', 'hand'],
+    'stale owned id pruned, advertised owned id kept, hand-entered id kept')
+  assert.equal(h.calls.replace, 1)
+  h.dispose()
+})
+
+test('activation with no configured providers logs nothing-to-sync and writes nothing', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+  t.after(() => mock.timers.reset())
+  const h = harness(undefined, [{ id: 'a' }])
+  apply(h.context, { intervalMinutes: 0 })
+  await mock.timers.tick(ACTIVATION_DELAY_MS)
+  await flush()
+
+  assert.equal(h.calls.discover, 0, 'no discovery without a section')
+  assert.equal(h.calls.replace, 0)
+  assert.ok(h.calls.logs.some((entry) =>
+    entry[0] === '[dsh-model-sync] %s sync: no llm-pi-ai providers configured; nothing to sync'
+    && entry[1] === 'activation'))
   h.dispose()
 })
