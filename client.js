@@ -81,11 +81,14 @@ window.__ModuleLoader__.load({
         }), 'dsh-model-sync: dictionaries')
         const t = ctx.locale.bind('modelSync')
         const scope = ctx.settingsScope.bind({ namespace: 'model-sync' })
-        ctx.effect(() => ctx.slots.register({
+        // Injection, not a bare registration: the plugins.bundle.config seat
+        // exists only once ui-plugin-manager's own entry realizes its 'main'
+        // registration, which can happen after this entry activates — a bare
+        // register in apply would throw 'slot is not declared' at boot.
+        ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
           name: 'plugins.bundle.config',
           key: 'dsh-model-sync',
-        }, (props) => h(LastSyncPanel, { ...props, scope, t })),
-        'dsh-model-sync: last-sync panel')
+        }, (props) => h(LastSyncPanel, { ...props, scope, t })))
       },
     }
   },

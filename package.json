@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-sync",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Mirror llm-pi-ai providers' advertised model lists into Settings → Models.",
   "type": "module",
   "exports": {
