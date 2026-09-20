@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-sync",
-  "version": "0.7.0",
-  "description": "Mirror llm-pi-ai providers' advertised model lists into Settings → Models.",
+  "version": "0.7.1",
+  "description": "Auto-populate and auto-update the list of llm-pi-ai providers' models. Turn the plugin on and off to update on-demand",
   "type": "module",
   "exports": {
     ".": "./index.js",
