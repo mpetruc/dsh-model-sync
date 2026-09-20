@@ -39,20 +39,22 @@ re-enable that triggered the pass.
 - **Prune** (`prune: true`) — entries marked `owner: 'model-sync'` that are
   no longer advertised are removed. Hand-entered entries are never pruned.
 - **Rejected** — when an owned id that is still advertised disappears between
-  two syncs, it is treated as a deliberate deletion, remembered in the
-  `model-sync` settings namespace, and not re-added. Manually re-adding a
-  rejected id clears the rejection. Detection diffs *consecutive* syncs within
-  one activation, so a manual re-enable never triggers it — the re-enable
-  resets the in-memory baseline, and a single activation sync re-adds a
-  deleted id. Deletion detection stays live only with a positive
-  `intervalMinutes`.
+  two syncs, it is treated as a deliberate deletion, remembered in a plugin
+  state file (below), and not re-added. Manually re-adding a rejected id
+  clears the rejection. Detection diffs *consecutive* syncs within one
+  activation, so a manual re-enable never triggers it — the re-enable resets
+  the in-memory baseline, and a single activation sync re-adds a deleted id.
+  Deletion detection stays live only with a positive `intervalMinutes`.
 
 Provenance for pruning rides on the per-entry `owner` marker (single source —
-no duplicated model list). Only the small per-provider `rejected` id lists
-live in the `model-sync` namespace, because a deleted entry's marker is gone
-with it. Entries configured before this version have no owner and count as
-hand-entered; clearing the provider's `models` list once and letting the
-plugin rebuild it gives every entry full tracking.
+no duplicated model list). The small per-provider `rejected` id lists are the
+sync's own bookkeeping, so they live in the plugin's state file — a JSON
+document at `<dshHome>/storages/model-sync/state.json` (configurable via
+`stateFile`) — never in the settings document, which is user configuration and
+holds only the `lastSync` outcome the Plugins page renders. Entries configured
+before this version have no owner and count as hand-entered; clearing the
+provider's `models` list once and letting the plugin rebuild it gives every
+entry full tracking.
 
 ## Configuration
 
@@ -67,6 +69,8 @@ The bundle inserts a `model-sync` row:
     #     NB: a positive interval also enables deletion detection (rejected)
     prune: false         # true = remove auto-added ids no longer advertised
     # providers: [amd-server]   # optional: restrict which providers to sync
+    # stateFile:                # optional: rejection-baseline state file
+    #                           # (default: <dshHome>/storages/model-sync/state.json)
 ```
 
 Every activation — first boot or a manual re-enable from the Plugins page —
@@ -81,6 +85,10 @@ runs one sync ~1.5 s after the `llm`/`settings` services are ready; a positive
   boot/re-enable, `… interval sync: …` for the repeating timer — so a manual
   toggle is visible in the host log. Activation passes add an outcome summary
   line, `[dsh-model-sync] activation summary: …`.
+- The rejection baseline moves out of the settings document in 0.7.0: a
+  pre-0.7.0 `providers` key found in the `model-sync` namespace is migrated
+  into the state file and stripped from the settings document on the next
+  sync.
 - `npm test` (node:test fake timers) needs Node ≥ 20.4, and ≥ 21.3 to silence
   the `--disable-warning` flag; the plugin itself only requires `engines`'s
   `>=18`.

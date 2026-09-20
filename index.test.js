@@ -7,19 +7,26 @@
  * setInterval, which the test replaces with controlled fake timers.
  */
 
+import { dirname, join } from 'node:path'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { apply } from './index.js'
 
-/** Flush the microtask chain underneath the fake-timer callbacks. */
-const flush = () => new Promise((resolve) => setImmediate(resolve))
+/** Drain the event loop so fake-timer callbacks' async work settles. */
+const flush = async () => {
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve))
+}
 
 /** One sync pass settle delay, mirrored from the plugin's internal constant. */
 const ACTIVATION_DELAY_MS = 1500
 
 /**
  * Build a fake host context: `llm` answers one fixed advertised list, and
- * `settings` keeps registered namespaces in an in-memory store. `inject` runs
+ * `settings` keeps registered namespaces in an in-memory store. The plugin's
+ * rejection-baseline state file lands under a per-test temp directory
+ * (`dshHomePath` routes it there) and is wiped on dispose. `inject` runs
  * its callback immediately as a mini fiber whose effect disposers and
  * callback return value are collected, mirroring how the real loader owns
  * them; `dispose` tears that fiber down so a re-enable can start a new one.
@@ -29,6 +36,9 @@ const ACTIVATION_DELAY_MS = 1500
 function harness(section, models) {
   const store = new Map()
   if (section !== undefined) store.set('llm-pi-ai', section)
+  const root = mkdtempSync(join(tmpdir(), 'dsh-model-sync-'))
+  const stateFile = join(root, 'storages', 'model-sync', 'state.json')
+  mkdirSync(dirname(stateFile), { recursive: true })
   const calls = { discover: 0, replace: 0, update: 0, logs: [] }
   const disposers = []
   const settings = {
@@ -62,7 +72,10 @@ function harness(section, models) {
       info: (...args) => calls.logs.push(args),
       warn: (...args) => calls.logs.push(args),
     },
-    get: (name) => (name === 'settings' ? settings : name === 'llm' ? llm : undefined),
+    get: (name) => (name === 'settings' ? settings
+      : name === 'llm' ? llm
+      : name === 'dshHomePath' ? (relative) => join(root, relative)
+      : undefined),
     inject(deps, callback) {
       const result = callback({
         settings,
@@ -78,8 +91,9 @@ function harness(section, models) {
   }
   const dispose = () => {
     while (disposers.length > 0) disposers.pop()()
+    rmSync(root, { recursive: true, force: true })
   }
-  return { context, store, calls, dispose }
+  return { context, store, calls, dispose, stateFile }
 }
 
 test('boot activation sync discovers models and writes them once', async (t) => {
@@ -241,8 +255,8 @@ test('persisted rejections survive a re-enable: a rejected id is not re-added', 
     [{ id: 'a' }],
   )
   // A rejection recorded by an earlier interval-based detection lives in the
-  // persisted namespace; only the in-memory baseline resets on re-enable.
-  h.store.set('model-sync', { providers: { p1: { rejected: ['a'] } } })
+  // plugin state file; only the in-memory baseline resets on re-enable.
+  writeFileSync(h.stateFile, JSON.stringify({ providers: { p1: { rejected: ['a'] } } }))
   apply(h.context, { intervalMinutes: 0 })
   await mock.timers.tick(ACTIVATION_DELAY_MS)
   await flush()
@@ -250,6 +264,63 @@ test('persisted rejections survive a re-enable: a rejected id is not re-added', 
   const models = h.store.get('llm-pi-ai').providers.p1.models
   assert.deepEqual(models.map((model) => model.id), [], 'rejected id stays out')
   assert.equal(h.calls.replace, 0)
+  assert.deepEqual(JSON.parse(readFileSync(h.stateFile, 'utf8')).providers,
+    { p1: { rejected: ['a'] } }, 'the pass does not touch the baseline')
+  h.dispose()
+})
+
+test('interval detection records a deliberate deletion in the state file, not settings', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+  t.after(() => mock.timers.reset())
+  const h = harness(
+    { providers: { p1: { baseURL: 'http://x/v1', models: [] } } },
+    [{ id: 'a' }, { id: 'b' }],
+  )
+  apply(h.context, { intervalMinutes: 5 })
+  await mock.timers.tick(ACTIVATION_DELAY_MS)
+  await flush()
+
+  // A hand deletion while the id is still advertised: owned id gone, id
+  // advertised, not previously rejected — a deliberate deletion.
+  h.store.get('llm-pi-ai').providers.p1.models =
+    h.store.get('llm-pi-ai').providers.p1.models.filter((model) => model.id !== 'a')
+  await mock.timers.tick(5 * 60_000)
+  await flush()
+
+  assert.deepEqual(JSON.parse(readFileSync(h.stateFile, 'utf8')).providers,
+    { p1: { rejected: ['a'] } }, 'deliberate deletion recorded in the state file')
+  assert.ok(!('providers' in h.store.get('model-sync')), 'settings namespace stays clean')
+  // The next interval pass does not resurrect the rejected id.
+  await mock.timers.tick(5 * 60_000)
+  await flush()
+  const models = h.store.get('llm-pi-ai').providers.p1.models
+  assert.deepEqual(models.map((model) => model.id), ['b'], 'rejected id stays out')
+  h.dispose()
+})
+
+test('a legacy settings document migrates its rejection baseline into the state file', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+  t.after(() => mock.timers.reset())
+  const h = harness(
+    { providers: { p1: { baseURL: 'http://x/v1', models: [] } } },
+    [{ id: 'a' }],
+  )
+  // A pre-0.7.0 document stored the baseline in the model-sync namespace.
+  h.store.set('model-sync', {
+    providers: { p1: { rejected: ['a'] } },
+    lastSync: { at: '2026-09-19T00:00:00.000Z', providers: { p1: { added: [], deleted: [] } } },
+  })
+  apply(h.context, { intervalMinutes: 0 })
+  await mock.timers.tick(ACTIVATION_DELAY_MS)
+  await flush()
+
+  const namespace = h.store.get('model-sync')
+  assert.ok(!('providers' in namespace), 'legacy baseline stripped from the namespace')
+  assert.equal(typeof namespace.lastSync.at, 'string')
+  assert.deepEqual(JSON.parse(readFileSync(h.stateFile, 'utf8')).providers,
+    { p1: { rejected: ['a'] } }, 'baseline moved into the state file')
+  const models = h.store.get('llm-pi-ai').providers.p1.models
+  assert.deepEqual(models.map((model) => model.id), [], 'the migrated rejection is honored')
   h.dispose()
 })
 

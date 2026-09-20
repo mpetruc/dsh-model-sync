@@ -32,20 +32,26 @@
  *   longer advertised are removed. Hand-entered entries are never pruned.
  * - Rejected: when an owned id that is still advertised disappears between
  *   two consecutive syncs, the plugin treats it as a deliberate deletion and
- *   remembers it in the `model-sync` settings namespace so it is not
- *   re-added. The owner marker cannot remember a deleted entry — the entry
- *   is gone — so detection diffs the previous sync's owned ids (an in-memory
- *   baseline) against the current section, and only these bare id lists live
- *   in the namespace, never a duplicate of the models array. Manually
- *   re-adding a rejected id clears the rejection. Detection diffs consecutive
- *   syncs (in-memory baseline, refreshed at every run), so it stays live only
- *   with a positive `intervalMinutes`; with `intervalMinutes: 0` (activation
- *   sync only) a deletion is re-added at the next activation's sync.
+ *   remembers it so it is not re-added. The owner marker cannot remember a
+ *   deleted entry — the entry is gone — so detection diffs the previous
+ *   sync's owned ids (an in-memory baseline) against the current section.
+ *   Manually re-adding a rejected id clears the rejection. The rejection map
+ *   is the sync's own bookkeeping, not user configuration: it lives in a
+ *   plugin state file (`config.stateFile`, default
+ *   `<dshHome>/storages/model-sync/state.json`) rather than the settings
+ *   document, which holds only what the UI reads (`lastSync`). Detection
+ *   diffs consecutive syncs (in-memory baseline, refreshed at every run), so
+ *   it stays live only with a positive `intervalMinutes`; with
+ *   `intervalMinutes: 0` (activation sync only) a deletion is re-added at
+ *   the next activation's sync.
  *
  * @module dsh-model-sync
  */
 
 import z from '@deepseek-ai/schemastery'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 
 /** llm-pi-ai settings namespace read and written by this plugin. */
 const SETTINGS_NS = 'llm-pi-ai'
@@ -53,21 +59,19 @@ const SETTINGS_NS = 'llm-pi-ai'
 /** Namespace whose registered model discovery serves drafts. */
 const DISCOVERY_NS = 'llm-pi-ai'
 
-/** Namespace holding rejection memory per provider. */
+/** Namespace holding the last activation outcome for the Plugins page. */
 const PROVENANCE_NS = 'model-sync'
 
 /** Entry marker value for ids this plugin auto-added. */
 const OWNER = 'model-sync'
 
 /**
- * Namespace schema: bare rejection id lists, plus the last activation pass'
- * outcome (`lastSync`) the bundle's Plugins page displays. Never a duplicate
- * of the models array — ids only, refreshed every activation pass.
+ * Namespace schema: the last activation pass' outcome (`lastSync`) the
+ * bundle's Plugins page displays. The rejection baseline used to live here;
+ * it moved to the state file in 0.7.0 (see {@link loadStateFile}), so a
+ * legacy `providers` key is migrated at the next sync.
  */
 const PROVENANCE_SCHEMA = z.object({
-  providers: z.dict(z.object({
-    rejected: z.array(z.string()).default([]),
-  })).default({}),
   lastSync: z.object({
     at: z.string(),
     providers: z.dict(z.object({
@@ -76,6 +80,50 @@ const PROVENANCE_SCHEMA = z.object({
     })).default({}),
   }).required(false),
 })
+
+/** Default state-file location under the harness home. */
+const STATE_FILE_REL = join('storages', 'model-sync', 'state.json')
+
+/**
+ * Resolve the sync-state file: `config.stateFile`, else the harness home's
+ * storages directory (via the `dshHomePath` helper), else `$DSH_HOME` or
+ * `~/.dsh`.
+ * @param ctx - host context; may expose the `dshHomePath` helper.
+ * @param config - plugin configuration.
+ * @returns the absolute state-file path.
+ */
+function resolveStateFile(ctx, config) {
+  if (typeof config.stateFile === 'string' && config.stateFile.length > 0) return config.stateFile
+  const homePath = typeof ctx.get === 'function' ? ctx.get('dshHomePath') : undefined
+  if (typeof homePath === 'function') return homePath(STATE_FILE_REL)
+  return join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'storages', 'model-sync', 'state.json')
+}
+
+/**
+ * Read the sync-state document. A missing or unreadable file yields empty
+ * state: the rejection baseline is derived bookkeeping, so losing it only
+ * re-adds previously rejected ids at the next sync.
+ * @param file - state-file path.
+ * @returns `{ providers }` with per-provider `rejected` id lists.
+ */
+async function loadStateFile(file) {
+  try {
+    const parsed = JSON.parse(await readFile(file, 'utf8'))
+    return parsed && typeof parsed === 'object' && parsed.providers !== null
+      && typeof parsed.providers === 'object' && !Array.isArray(parsed.providers)
+      ? { providers: parsed.providers }
+      : { providers: {} }
+  } catch (error) {
+    // ENOENT and corrupt files both mean "no baseline recorded yet".
+    return { providers: {} }
+  }
+}
+
+/** Write the sync-state document, creating parent directories as needed. */
+async function saveStateFile(file, state) {
+  await mkdir(dirname(file), { recursive: true })
+  await writeFile(file, JSON.stringify(state, null, 2))
+}
 
 /** Settle grace before the activation sync (boot or manual re-enable). */
 const ACTIVATION_SYNC_DELAY_MS = 1500
@@ -106,7 +154,8 @@ function toEntry(model) {
 /**
  * Plugin body.
  * @param ctx - host context carrying llm / settings services.
- * @param config - composition entry (intervalMinutes, prune, providers).
+ * @param config - composition entry (intervalMinutes, prune, providers,
+ *   stateFile).
  */
 export function apply(ctx, config = {}) {
   const intervalMinutes = Number(config.intervalMinutes ?? 0)
@@ -114,6 +163,7 @@ export function apply(ctx, config = {}) {
   const wanted = Array.isArray(config.providers) && config.providers.length > 0
     ? new Set(config.providers)
     : null
+  const stateFile = resolveStateFile(ctx, config)
   let running = false
   // Owned ids observed at the previous sync, per provider. The `owner` marker
   // lives on entries, so a deleted entry is invisible to the current section;
@@ -124,7 +174,7 @@ export function apply(ctx, config = {}) {
     if (running) return
     running = true
     try {
-      await syncProviders(ctx, wanted, prune, scope, lastOwned, reason)
+      await syncProviders(ctx, wanted, prune, scope, lastOwned, reason, stateFile)
     } catch (error) {
       ctx.logger.warn('[dsh-model-sync] %s sync failed: %s', reason,
         error instanceof Error ? error.message : String(error))
@@ -154,18 +204,33 @@ export function apply(ctx, config = {}) {
 
 /**
  * One discovery-and-sync pass: merge adds, optional prune, and rejection
- * bookkeeping for each selected provider. Namespaces are written only when
- * their section actually changed.
+ * bookkeeping for each selected provider. Settings namespaces and the state
+ * file are written only when their section actually changed.
  * @param ctx - host context carrying llm / settings services.
  * @param wanted - provider name filter, or null for every provider.
  * @param prune - whether to remove owned ids no longer advertised.
- * @param scope - the model-sync rejection namespace scope.
+ * @param scope - the model-sync namespace scope (lastSync outcome).
  * @param lastOwned - owned ids seen at the previous sync, per provider.
  * @param reason - which trigger ran this pass ('activation' | 'interval').
+ * @param stateFile - path of the plugin's rejection-baseline state file.
  */
-async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
+async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason, stateFile) {
   const llm = ctx.get('llm')
   const settings = ctx.get('settings')
+  // Adopt a pre-0.7.0 document that still stored the rejection baseline in
+  // the namespace: move it into the state file once, then strip the key so
+  // the settings document keeps only what the UI reads.
+  const legacy = settings.get(PROVENANCE_NS)
+  if (legacy !== null && typeof legacy === 'object' && legacy.providers !== null
+    && typeof legacy.providers === 'object') {
+    const prior = await loadStateFile(stateFile)
+    if (Object.keys(prior.providers).length === 0 && Object.keys(legacy.providers).length > 0) {
+      await saveStateFile(stateFile, { providers: legacy.providers })
+    }
+    await scope.replace(legacy.lastSync === undefined ? {} : { lastSync: legacy.lastSync })
+  }
+  const state = await loadStateFile(stateFile)
+  const providerState = state.providers
   const section = settings.get(SETTINGS_NS)
   if (typeof section !== 'object' || section === null
     || typeof section.providers !== 'object' || section.providers === null) {
@@ -173,15 +238,11 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
     return
   }
   const work = structuredClone(section)
-  const provenance = structuredClone(scope.get() ?? {})
-  const providerState = typeof provenance.providers === 'object' && provenance.providers !== null
-    ? provenance.providers
-    : {}
   const notes = []
   const summaries = []
   const lastSyncProviders = {}
   let modelsChanged = false
-  let provenanceChanged = false
+  let stateDirty = false
   for (const [name, profile] of Object.entries(section.providers)) {
     if (wanted !== null && !wanted.has(name)) continue
     if (typeof profile !== 'object' || profile === null) continue
@@ -255,7 +316,7 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
 
     if (stateChanged) {
       providerState[name] = { rejected: state.rejected }
-      provenanceChanged = true
+      stateDirty = true
     }
     if (modelsChanged && Array.isArray(profile.models)) {
       work.providers[name] = { ...profile, models: existing }
@@ -276,20 +337,20 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason) {
   }
   // Persist the activation outcome for the bundle's Plugins page; interval
   // passes keep their per-pass notes in the log only.
-  const lastSync = reason === 'activation' && summaries.length > 0
-    ? { at: new Date().toISOString(), providers: lastSyncProviders }
-    : undefined
   if (modelsChanged) {
     await settings.replace(SETTINGS_NS, work)
   }
-  // Wholesale write: `providers` is the complete map, and `lastSync` either
-  // replaces the previous outcome or (interval-only runs) is carried over.
-  if (provenanceChanged || lastSync !== undefined) {
-    await scope.replace({
-      providers: providerState,
-      ...(lastSync === undefined
-        ? (provenance.lastSync === undefined ? {} : { lastSync: provenance.lastSync })
-        : { lastSync }),
-    })
+  // Rejection-baseline changes live in the state file, never the settings
+  // document (settings are user configuration, not sync bookkeeping).
+  if (stateDirty) {
+    await saveStateFile(stateFile, state)
+  }
+  // Persist the activation outcome for the bundle's Plugins page; interval
+  // passes keep their per-pass notes in the log only.
+  const lastSync = reason === 'activation' && summaries.length > 0
+    ? { at: new Date().toISOString(), providers: lastSyncProviders }
+    : undefined
+  if (lastSync !== undefined) {
+    await scope.replace({ lastSync })
   }
 }

@@ -8,12 +8,17 @@
  * failures. Mirrors the fake-harness approach of index.test.js.
  */
 
+import { dirname, join } from 'node:path'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { apply } from './index.js'
 
-/** Flush the microtask chain underneath the fake-timer callbacks. */
-const flush = () => new Promise((resolve) => setImmediate(resolve))
+/** Drain the event loop so fake-timer callbacks' async work settles. */
+const flush = async () => {
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve))
+}
 
 /** One sync pass settle delay, mirrored from the plugin's internal constant. */
 const ACTIVATION_DELAY_MS = 1500
@@ -27,6 +32,9 @@ const ACTIVATION_DELAY_MS = 1500
 function harness(section, discover) {
   const store = new Map()
   if (section !== undefined) store.set('llm-pi-ai', section)
+  const root = mkdtempSync(join(tmpdir(), 'dsh-model-sync-'))
+  const stateFile = join(root, 'storages', 'model-sync', 'state.json')
+  mkdirSync(dirname(stateFile), { recursive: true })
   const calls = { discover: 0, replace: 0, update: 0, logs: [] }
   const disposers = []
   const settings = {
@@ -60,7 +68,10 @@ function harness(section, discover) {
       info: (...args) => calls.logs.push(args),
       warn: (...args) => calls.logs.push(args),
     },
-    get: (name) => (name === 'settings' ? settings : name === 'llm' ? llm : undefined),
+    get: (name) => (name === 'settings' ? settings
+      : name === 'llm' ? llm
+      : name === 'dshHomePath' ? (relative) => join(root, relative)
+      : undefined),
     inject(deps, callback) {
       const result = callback({
         settings,
@@ -76,8 +87,9 @@ function harness(section, discover) {
   }
   const dispose = () => {
     while (disposers.length > 0) disposers.pop()()
+    rmSync(root, { recursive: true, force: true })
   }
-  return { context, store, calls, dispose }
+  return { context, store, calls, dispose, stateFile }
 }
 
 test('dispose before the settle timer fires suppresses the sync; re-enable runs exactly one', async (t) => {
@@ -180,10 +192,10 @@ test('re-enable resets the deletion baseline: a deleted owned id is re-added, no
   const ids = models.map((model) => model.id)
   assert.ok(ids.includes('a'), 'deleted id is re-added after a fresh activation')
   assert.equal(ids.length, 2)
-  // Fresh baseline means no rejection memory was written for this provider;
-  // the namespace carries only the lastSync outcome for the UI.
+  // Fresh baseline means no rejection memory was recorded; the namespace
+  // carries only the lastSync outcome for the UI, never a providers key.
   const provenance = h.store.get('model-sync')
-  assert.deepEqual(provenance.providers, {}, 'no rejection memory on a fresh activation')
+  assert.ok(!('providers' in provenance), 'settings namespace stays free of sync bookkeeping')
   h.dispose()
 })
 
