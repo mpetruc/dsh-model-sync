@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-model-sync — Architecture &amp; Flow Report</title>
+<style>
+  :root {
+    --ink: #212529;
+    --muted: #6c757d;
+    --line: #dee2e6;
+    --bg: #ffffff;
+    --soft: #f8f9fa;
+    --accent: #4263eb;
+    --accent-soft: #e7f0ff;
+    --good: #087f5b;
+    --warn: #e8590c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    background: var(--soft); color: var(--ink);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  }
+  main { max-width: 1180px; margin: 0 auto; background: var(--bg);
+         border: 1px solid var(--line); border-radius: 12px; padding: 3rem 3.5rem;
+         box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  h1 { font-size: 1.9rem; margin: 0 0 .25rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.35rem; margin: 2.6rem 0 .6rem; padding-top: .6rem;
+       border-top: 2px solid var(--accent-soft); letter-spacing: -.01em; }
+  h3 { font-size: 1.05rem; margin: 1.6rem 0 .4rem; }
+  p  { margin: .55rem 0; }
+  .subtitle { color: var(--muted); margin-bottom: 1rem; }
+  .meta { display: flex; flex-wrap: wrap; gap: .5rem 1.6rem; color: var(--muted);
+          font-size: .85rem; border: 1px solid var(--line); border-radius: 8px;
+          background: var(--soft); padding: .55rem .9rem; margin: 1rem 0 1.4rem; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  code { background: #f1f3f5; border: 1px solid var(--line); border-radius: 4px;
+         padding: .05rem .3rem; font: .86em "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+  pre { background: #f6f8fa; border: 1px solid var(--line); border-radius: 8px;
+        padding: .8rem 1rem; overflow-x: auto; font: .83em/1.5 "SFMono-Regular", Consolas, monospace; }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0 1.2rem;
+          font-size: .9rem; }
+  th, td { border: 1px solid var(--line); padding: .42rem .6rem; text-align: left;
+           vertical-align: top; }
+  th { background: var(--soft); font-weight: 600; }
+  tr:nth-child(even) td { background: #fcfcfd; }
+  figure { margin: 1.5rem 0 2rem; }
+  figure svg { width: 100%; height: auto; display: block;
+               border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+  figcaption { font-size: .87rem; color: var(--muted); margin-top: .5rem; }
+  .legend { display: flex; flex-wrap: wrap; gap: .6rem 1.4rem; font-size: .82rem;
+            color: var(--muted); margin: .5rem 0 0; padding: .5rem .8rem;
+            border: 1px dashed var(--line); border-radius: 8px; background: #fcfcfd; }
+  .legend span { display: inline-flex; align-items: center; gap: .4rem; }
+  .sw { display: inline-block; width: 14px; height: 14px; border-radius: 4px;
+        border: 1px solid rgba(0,0,0,.25); }
+  .badge { display: inline-block; min-width: 1.55rem; text-align: center;
+           background: var(--accent); color: #fff; border-radius: 999px;
+           font-size: .8rem; font-weight: 700; padding: .1rem .4rem; margin-right: .3rem; }
+  .note { border-left: 4px solid var(--warn); background: #fff4e6; padding: .6rem .9rem;
+          border-radius: 0 8px 8px 0; margin: .9rem 0; font-size: .92rem; }
+  .ok   { border-left: 4px solid var(--good); background: #e6fcf5; padding: .6rem .9rem;
+          border-radius: 0 8px 8px 0; margin: .9rem 0; font-size: .92rem; }
+  .toc { columns: 1; font-size: .92rem; }
+  .toc ol { margin: .4rem 0; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  ul, ol { margin: .5rem 0 .8rem; padding-left: 1.4rem; }
+  li { margin: .22rem 0; }
+  .kbd { font-family: ui-monospace, Consolas, monospace; font-size: .85em;
+         background: #212529; color: #f8f9fa; border-radius: 4px; padding: .08rem .35rem; }
+  @media (max-width: 820px) { main { padding: 1.5rem 1rem; } }
+</style>
+</head>
+<body>
+<main>
+
+<h1>dsh-model-sync — Architecture &amp; Flow Report</h1>
+<div class="subtitle">A DeepSeek Harness plugin that mirrors each <code>llm-pi-ai</code> provider's advertised model list into the configuration.</div>
+
+<div class="meta">
+  <span><b>Repo:</b> /home/user1/dsh-model-sync</span>
+  <span><b>Package:</b> <code>dsh-model-sync</code> v0.7.1</span>
+  <span><b>License:</b> MIT</span>
+  <span><b>Head commit:</b> <code>c0ddddf</code> (2026-09-19)</span>
+  <span><b>Tests:</b> 17/17 passing (<code>npm test</code>)</span>
+  <span><b>Deployed in profile:</b> <code>web</code> (entry <code>model-sync</code>, enabled)</span>
+</div>
+
+<h2 id="toc">Contents</h2>
+<div class="toc">
+<ol>
+  <li><a href="#summary">Executive summary</a></li>
+  <li><a href="#components">Component inventory</a></li>
+  <li><a href="#flow">Flow diagram</a></li>
+  <li><a href="#walkthrough">End-to-end walkthrough</a></li>
+  <li><a href="#rules">Sync rules — decision diagram</a></li>
+  <li><a href="#lifecycle">Lifecycle &amp; triggers</a></li>
+  <li><a href="#interactions">Components &amp; how they interact</a></li>
+  <li><a href="#storage">Data &amp; persistence layout</a></li>
+  <li><a href="#config">Configuration reference</a></li>
+  <li><a href="#testing">Testing</a></li>
+  <li><a href="#integration">Harness integration points (verified)</a></li>
+  <li><a href="#contract">Contract notes &amp; compatibility observations</a></li>
+</ol>
+</div>
+
+<h2 id="summary">1 · Executive summary</h2>
+<p>
+The repo is a single <b>DeepSeek Harness (DSH) plugin / bundle</b> — a Cordis-style plugin with a host half
+(<code>index.js</code>), a web-client half (<code>client.js</code>), and a composition patch
+(<code>cordis.patch.yml</code>) that installs it. Its job: <b>auto-populate and auto-update the list of
+<code>llm-pi-ai</code> providers' models</b> so the Settings → Models section and the model dropdown show each
+provider's full advertised model list without hand-entry.
+</p>
+<p>
+On every <i>activation</i> of the plugin — first boot, or a manual re-enable of the <code>model-sync</code> row on
+the Plugins page — and optionally on a repeating interval, the host half performs one <i>sync pass</i>:
+</p>
+<ol>
+  <li>It reads the <code>llm-pi-ai</code> settings entry and, for each selected provider, asks the <code>llm</code>
+      service to <b>discover</b> the provider's advertised models via <code>llm.discoverModels('llm-pi-ai', {provider, baseURL, api})</code>
+      (answered from the installed pi-ai <i>catalog</i> for catalog routes, or from <code>GET {baseURL}/models</code>
+      for OpenAI-compatible / Anthropic routes).</li>
+  <li>It <b>diffs</b> the advertised ids against the configured <code>models[]</code>: new ids are appended with an
+      <code>owner: 'model-sync'</code> marker, plugin-owned ids that vanished from the listing are pruned only when
+      <code>prune: true</code>, and a plugin-owned id that was deliberately deleted while still advertised is
+      <i>rejected</i> (remembered in a plugin state file, never re-added).</li>
+  <li>It writes back only what changed: the <code>llm-pi-ai</code> section (models changed), the plugin state file
+      (rejections changed), and — for activation passes only — a <code>lastSync</code> outcome under the
+      <code>model-sync</code> settings entry that the Plugins page's <b>Last sync</b> panel renders live.</li>
+</ol>
+<p>
+Hand-entered entries are never rewritten or pruned (they carry no <code>owner</code> key); existing entries keep
+their ids, order, and capacities through every sync. The design keeps provenance on the entries themselves and
+moveable bookkeeping (rejections) out of user configuration entirely.
+</p>
+
+<h2 id="components">2 · Component inventory</h2>
+<table>
+  <tr><th>File</th><th>Role</th><th>Key contents</th></tr>
+  <tr>
+    <td><code>index.js</code> (host)</td>
+    <td>Plugin body; the entire sync engine</td>
+    <td><code>apply(ctx, config)</code>; <code>syncProviders()</code> core pass; merge rules (add / prune / reject);
+        state-file IO; legacy migration (0.7.0); outcome summaries; timer lifecycle
+        (activation +1.5&nbsp;s settle, optional interval)</td>
+  </tr>
+  <tr>
+    <td><code>client.js</code> (web)</td>
+    <td>Plugins-page panel that shows the last sync outcome</td>
+    <td>Module registered via <code>window.__ModuleLoader__</code>; <code>LastSyncPanel</code> React component;
+        snapshot source over <code>remote.settings.describe()</code>; refresh on
+        <code>settings/document-updated</code> + <code>connection/reset</code>; deferred injection into the keyed
+        <code>plugins.bundle.config</code> slot; en/zh locale dictionaries</td>
+  </tr>
+  <tr>
+    <td><code>cordis.patch.yml</code></td>
+    <td>Composition patch the bundle ships</td>
+    <td>Inserts the <code>model-sync</code> profile entry with <code>config:</code> defaults
+        (<code>intervalMinutes: 0</code>, <code>prune: false</code>)</td>
+  </tr>
+  <tr>
+    <td><code>package.json</code></td>
+    <td>Package manifest + DSH bundle metadata</td>
+    <td>Entry <code>./index.js</code>, client entry <code>./client</code>; <code>dsh.bundle.patch</code> →
+        <code>cordis.patch.yml</code>; <code>dsh.client</code> declares platform <code>web</code> and injects
+        <code>@deepseek-ai/dsh-client-ui-settings</code> + <code>@deepseek-ai/dsh-client-locale</code>; sole runtime
+        dependency <code>@deepseek-ai/schemastery</code> (used to declare the <code>model-sync</code> namespace schema)</td>
+  </tr>
+  <tr>
+    <td><code>index.test.js</code></td>
+    <td>Behavior suite (11 tests)</td>
+    <td>Boot sync, manual re-enable, interval repeats, activation summaries, prune, rejection persistence, legacy
+        migration, no-provider path — against a fake host context with fake timers</td>
+  </tr>
+  <tr>
+    <td><code>index.edge.test.js</code></td>
+    <td>Adversarial lifecycle suite (6 tests)</td>
+    <td>Dispose before settle, dispose mid-sync, rapid toggles, per-activation deletion baseline reset, interval
+        cleanup, failing provider isolation</td>
+  </tr>
+  <tr>
+    <td><code>README.md</code></td>
+    <td>Manual + design doc</td>
+    <td>Manual-sync workflow, sync rules, configuration reference, notes</td>
+  </tr>
+</table>
+
+<h2 id="flow">3 · Flow diagram</h2>
+<p>
+The diagram below is the end-to-end flow of one sync: the trigger paths on the left, the host pipeline in the
+middle (with the per-provider pass in a dashed container), the external/storage sinks on the right, and the web-UI
+surfaces that consume the results at the bottom. Numbered badges ①–⑫ match the walkthrough in section 4.
+</p>
+
+<figure>
+  <svg viewBox="0 0 1560 1000" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="End-to-end sync flow diagram">
+    <defs>
+      <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+              orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#495057"/>
+      </marker>
+      <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+              orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#868e96"/>
+      </marker>
+    </defs>
+
+    <!-- ================= LANES ================= -->
+    <rect x="20" y="40" width="1060" height="580" rx="12" fill="#f4f6fb" stroke="#c9d3e8"/>
+    <text x="40" y="64" font-size="13" font-weight="700" fill="#495057" letter-spacing="1">HOST — plugin &amp; services (Node.js)</text>
+
+    <rect x="20" y="700" width="1060" height="280" rx="12" fill="#f2f8fc" stroke="#c6dce8"/>
+    <text x="40" y="724" font-size="13" font-weight="700" fill="#495057" letter-spacing="1">WEB UI — client bundle (browser)</text>
+
+    <!-- ================= ROW 1: activation ================= -->
+    <!-- A1 -->
+    <g class="node" data-label="A1">
+      <rect x="40" y="92" width="200" height="64" rx="10" fill="#d3f9d8" stroke="#2f9e44" stroke-width="1.6"/>
+      <text x="140" y="114" font-size="13" font-weight="700" text-anchor="middle" fill="#18692f">Plugin entry <tspan font-family="monospace">model-sync</tspan></text>
+      <text x="140" y="132" font-size="12" text-anchor="middle" fill="#2b8a3e">apply(config) activates</text>
+      <text x="140" y="149" font-size="10.5" text-anchor="middle" fill="#2b8a3e">boot · re-enable · interval</text>
+    </g>
+    <circle cx="56" cy="78" r="11" fill="#4263eb"/>
+    <text x="56" y="82" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">1</text>
+
+    <!-- A2 -->
+    <g class="node" data-label="A2">
+      <rect x="270" y="92" width="170" height="64" rx="10" fill="#e7f0ff" stroke="#4263eb" stroke-width="1.6"/>
+      <text x="355" y="112" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">ctx.inject(['llm',</text>
+      <text x="355" y="129" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">'settings'])</text>
+      <text x="355" y="147" font-size="11" text-anchor="middle" fill="#3b5bdb">wait for services</text>
+    </g>
+    <circle cx="286" cy="78" r="11" fill="#4263eb"/>
+    <text x="286" y="82" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">2</text>
+
+    <!-- A3 -->
+    <g class="node" data-label="A3">
+      <rect x="470" y="92" width="190" height="64" rx="10" fill="#e7f0ff" stroke="#4263eb" stroke-width="1.6"/>
+      <text x="565" y="112" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">register 'model-sync'</text>
+      <text x="565" y="129" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">namespace scope +</text>
+      <text x="565" y="147" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">schema (lastSync)</text>
+    </g>
+    <circle cx="486" cy="78" r="11" fill="#4263eb"/>
+    <text x="486" y="82" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">3</text>
+
+    <!-- A4 -->
+    <g class="node" data-label="A4">
+      <rect x="690" y="92" width="330" height="64" rx="10" fill="#e7f0ff" stroke="#4263eb" stroke-width="1.6"/>
+      <text x="855" y="112" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">schedule sync pass:</text>
+      <text x="855" y="129" font-size="12" text-anchor="middle" fill="#1c2b5e">activation after 1.5 s settle</text>
+      <text x="855" y="147" font-size="12" text-anchor="middle" fill="#1c2b5e">interval repeat if intervalMinutes &gt; 0</text>
+    </g>
+    <circle cx="706" cy="78" r="11" fill="#4263eb"/>
+    <text x="706" y="82" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">4</text>
+
+    <!-- interval loop -->
+    <path d="M945,156 L945,170 L974,170 L974,158" fill="none" stroke="#495057" stroke-width="1.5" marker-end="url(#ah)"/>
+    <text x="980" y="173" font-size="10.5" fill="#6c757d">interval tick (N &gt; 0)</text>
+
+    <!-- boot trigger -->
+    <path d="M150,80 L150,90" fill="none" stroke="#495057" stroke-width="1.5" marker-end="url(#ah)"/>
+    <text x="138" y="77" font-size="11" fill="#6c757d">boot</text>
+
+    <!-- ================= SYNC PASS CONTAINER ================= -->
+    <rect x="40" y="210" width="1060" height="400" rx="12" fill="#fafcff" stroke="#748ffc" stroke-width="1.4" stroke-dasharray="7 5"/>
+    <text x="570" y="234" font-size="12.5" font-weight="700" text-anchor="middle" fill="#3b5bdb" letter-spacing="0.5">ONE SYNC PASS — syncProviders() · one iteration per selected provider</text>
+
+    <!-- B1 -->
+    <g class="node" data-label="B1">
+      <rect x="60" y="252" width="280" height="60" rx="9" fill="#e7f0ff" stroke="#4263eb" stroke-width="1.5"/>
+      <text x="200" y="274" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">read + deep-clone 'llm-pi-ai' section</text>
+      <text x="200" y="292" font-size="11.5" text-anchor="middle" fill="#3b5bdb">migrate legacy 'providers' key (0.7.0)</text>
+    </g>
+    <circle cx="76" cy="238" r="11" fill="#4263eb"/>
+    <text x="76" y="242" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">5</text>
+
+    <!-- B2 -->
+    <g class="node" data-label="B2">
+      <rect x="370" y="252" width="230" height="60" rx="9" fill="#e7f0ff" stroke="#4263eb" stroke-width="1.5"/>
+      <text x="485" y="274" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">load state file</text>
+      <text x="485" y="292" font-size="11.5" text-anchor="middle" fill="#3b5bdb">per-provider rejected id lists</text>
+    </g>
+    <circle cx="386" cy="238" r="11" fill="#4263eb"/>
+    <text x="386" y="242" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">6</text>
+
+    <!-- B3 -->
+    <g class="node" data-label="B3">
+      <rect x="630" y="252" width="280" height="60" rx="9" fill="#e7f0ff" stroke="#4263eb" stroke-width="1.5"/>
+      <text x="770" y="274" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">llm.discoverModels('llm-pi-ai',</text>
+      <text x="770" y="292" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">{provider, baseURL, api})</text>
+    </g>
+    <circle cx="646" cy="238" r="11" fill="#4263eb"/>
+    <text x="646" y="242" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">7</text>
+
+    <!-- E1 external source -->
+    <g class="node" data-label="E1">
+      <rect x="1140" y="180" width="340" height="116" rx="10" fill="#f3e8ff" stroke="#845ef7" stroke-width="1.5"/>
+      <text x="1310" y="202" font-size="12.5" font-weight="700" text-anchor="middle" fill="#5f3dc4">Advertised models source</text>
+      <text x="1310" y="222" font-size="11.5" text-anchor="middle" fill="#7048e8">catalog route → installed pi-ai catalog</text>
+      <text x="1310" y="239" font-size="11.5" text-anchor="middle" fill="#7048e8">(offline; carries capacities)</text>
+      <text x="1310" y="259" font-size="11.5" text-anchor="middle" fill="#7048e8">other routes → GET {baseURL}/models</text>
+      <text x="1310" y="276" font-size="11.5" text-anchor="middle" fill="#7048e8">(OpenAI / Anthropic; bounded 4 MiB)</text>
+    </g>
+    <!-- B3 -> E1 -->
+    <path d="M910,282 C1010,282 1060,252 1134,240" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <text x="1000" y="254" font-size="10.5" fill="#6c757d">GET /models</text>
+    <!-- E1 -> B3 (dashed) -->
+    <path d="M1136,266 C1060,284 1020,298 912,296" fill="none" stroke="#868e96" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ahg)"/>
+    <text x="1030" y="310" font-size="10.5" fill="#6c757d">listing / catalog reply</text>
+
+    <!-- ================= MERGE B4 ================= -->
+    <g class="node" data-label="B4">
+      <rect x="300" y="360" width="400" height="160" rx="12" fill="#fff4e6" stroke="#f76707" stroke-width="1.8"/>
+      <text x="500" y="386" font-size="13" font-weight="700" text-anchor="middle" fill="#d9480f">MERGE — diff section vs listing</text>
+      <text x="500" y="405" font-size="11.5" text-anchor="middle" fill="#e8590c">per provider; in-memory baseline for deletion detection</text>
+    </g>
+    <circle cx="316" cy="346" r="11" fill="#4263eb"/>
+    <text x="316" y="350" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">8</text>
+
+    <!-- chips -->
+    <g class="node" data-label="chip-add">
+      <rect x="318" y="420" width="116" height="80" rx="8" fill="#ffffff" stroke="#1c7ed6" stroke-width="1.4"/>
+      <text x="376" y="442" font-size="11.5" font-weight="700" text-anchor="middle" fill="#1c7ed6">ADDS</text>
+      <text x="376" y="459" font-size="10.5" text-anchor="middle" fill="#343a40">new advertised ids</text>
+      <text x="376" y="474" font-size="10.5" text-anchor="middle" fill="#343a40">get appended with</text>
+      <text x="376" y="489" font-size="10.5" text-anchor="middle" fill="#343a40">owner marker</text>
+    </g>
+    <g class="node" data-label="chip-prune">
+      <rect x="442" y="420" width="116" height="80" rx="8" fill="#ffffff" stroke="#e64980" stroke-width="1.4"/>
+      <text x="500" y="442" font-size="11.5" font-weight="700" text-anchor="middle" fill="#e64980">PRUNE</text>
+      <text x="500" y="459" font-size="10.5" text-anchor="middle" fill="#343a40">owned ids gone</text>
+      <text x="500" y="474" font-size="10.5" text-anchor="middle" fill="#343a40">from listing removed</text>
+      <text x="500" y="489" font-size="10.5" text-anchor="middle" fill="#343a40">only if prune: true</text>
+    </g>
+    <g class="node" data-label="chip-reject">
+      <rect x="566" y="420" width="116" height="80" rx="8" fill="#ffffff" stroke="#e03131" stroke-width="1.4"/>
+      <text x="624" y="442" font-size="11.5" font-weight="700" text-anchor="middle" fill="#e03131">REJECT</text>
+      <text x="624" y="459" font-size="10.5" text-anchor="middle" fill="#343a40">owned, gone from</text>
+      <text x="624" y="474" font-size="10.5" text-anchor="middle" fill="#343a40">section, still</text>
+      <text x="624" y="489" font-size="10.5" text-anchor="middle" fill="#343a40">advertised</text>
+    </g>
+    <text x="500" y="512" font-size="10.5" text-anchor="middle" fill="#a0616a">existing entries are never rewritten · hand-entered entries never pruned</text>
+
+    <!-- ================= WRITES B5-B8 ================= -->
+    <g class="node" data-label="B5">
+      <rect x="60" y="548" width="250" height="60" rx="9" fill="#e6fcf5" stroke="#0ca678" stroke-width="1.5"/>
+      <text x="185" y="570" font-size="12.5" font-weight="600" text-anchor="middle" fill="#087f5b">write settings section</text>
+      <text x="185" y="588" font-size="11" text-anchor="middle" fill="#0b7285">settings.replace('llm-pi-ai', work)</text>
+      <text x="185" y="603" font-size="10.5" text-anchor="middle" fill="#12b886">only when models changed</text>
+    </g>
+    <circle cx="76" cy="534" r="11" fill="#4263eb"/>
+    <text x="76" y="538" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">9</text>
+
+    <g class="node" data-label="B6">
+      <rect x="335" y="548" width="220" height="60" rx="9" fill="#e6fcf5" stroke="#0ca678" stroke-width="1.5"/>
+      <text x="445" y="570" font-size="12.5" font-weight="600" text-anchor="middle" fill="#087f5b">write state file</text>
+      <text x="445" y="588" font-size="11" text-anchor="middle" fill="#0b7285">saveStateFile(state.json)</text>
+      <text x="445" y="603" font-size="10.5" text-anchor="middle" fill="#12b886">only when rejections changed</text>
+    </g>
+    <circle cx="351" cy="534" r="11" fill="#4263eb"/>
+    <text x="351" y="538" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">10</text>
+
+    <g class="node" data-label="B7">
+      <rect x="580" y="548" width="240" height="60" rx="9" fill="#e6fcf5" stroke="#0ca678" stroke-width="1.5"/>
+      <text x="700" y="570" font-size="12.5" font-weight="600" text-anchor="middle" fill="#087f5b">persist outcome</text>
+      <text x="700" y="588" font-size="11" text-anchor="middle" fill="#0b7285">scope.replace({lastSync})</text>
+      <text x="700" y="603" font-size="10.5" text-anchor="middle" fill="#12b886">activation passes only</text>
+    </g>
+    <circle cx="596" cy="534" r="11" fill="#4263eb"/>
+    <text x="596" y="538" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">11</text>
+
+    <g class="node" data-label="B8">
+      <rect x="845" y="548" width="190" height="60" rx="9" fill="#f1f3f5" stroke="#868e96" stroke-width="1.5"/>
+      <text x="940" y="570" font-size="12.5" font-weight="600" text-anchor="middle" fill="#495057">logger</text>
+      <text x="940" y="588" font-size="11" text-anchor="middle" fill="#495057">per-pass notes + per-provider</text>
+      <text x="940" y="603" font-size="11" text-anchor="middle" fill="#495057">activation summary line</text>
+    </g>
+    <circle cx="861" cy="534" r="11" fill="#4263eb"/>
+    <text x="861" y="538" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">12</text>
+
+    <!-- ================= STORAGE COLUMN ================= -->
+    <g class="node" data-label="S1">
+      <rect x="1140" y="330" width="340" height="120" rx="10" fill="#fff9db" stroke="#fab005" stroke-width="1.5"/>
+      <text x="1310" y="352" font-size="12.5" font-weight="700" text-anchor="middle" fill="#997404">SETTINGS DOCUMENT — entry 'llm-pi-ai'</text>
+      <text x="1310" y="372" font-size="11" text-anchor="middle" fill="#664d03">providers[P].models[] — id, owner:</text>
+      <text x="1310" y="388" font-size="11" text-anchor="middle" fill="#664d03">'model-sync', name, contextWindow,</text>
+      <text x="1310" y="404" font-size="11" text-anchor="middle" fill="#664d03">maxTokens, input (when reported)</text>
+      <text x="1310" y="424" font-size="10.5" text-anchor="middle" fill="#868e16">hand-entered entries carry no owner</text>
+    </g>
+    <g class="node" data-label="S2">
+      <rect x="1140" y="470" width="340" height="110" rx="10" fill="#fff9db" stroke="#fab005" stroke-width="1.5"/>
+      <text x="1310" y="492" font-size="12.5" font-weight="700" text-anchor="middle" fill="#997404">PLUGIN STATE FILE</text>
+      <text x="1310" y="512" font-size="11" text-anchor="middle" fill="#664d03">&lt;dshHome&gt;/storages/model-sync/state.json</text>
+      <text x="1310" y="530" font-size="11" text-anchor="middle" fill="#664d03">{ "providers": { P: {</text>
+      <text x="1310" y="547" font-size="11" text-anchor="middle" fill="#664d03">"rejected": [ id, … ] } } }</text>
+      <text x="1310" y="567" font-size="10.5" text-anchor="middle" fill="#868e16">migrated from settings in 0.7.0</text>
+    </g>
+    <g class="node" data-label="S3">
+      <rect x="1140" y="600" width="340" height="120" rx="10" fill="#fff9db" stroke="#fab005" stroke-width="1.5"/>
+      <text x="1310" y="622" font-size="12.5" font-weight="700" text-anchor="middle" fill="#997404">SETTINGS DOCUMENT — entry 'model-sync'</text>
+      <text x="1310" y="642" font-size="11" text-anchor="middle" fill="#664d03">lastSync { at, providers: {</text>
+      <text x="1310" y="658" font-size="11" text-anchor="middle" fill="#664d03">P: { added: [ids], deleted: [ids] } } }</text>
+      <text x="1310" y="682" font-size="10.5" text-anchor="middle" fill="#868e16">rendered by the Plugins page panel</text>
+    </g>
+
+    <!-- write edges -->
+    <path d="M310,578 C650,578 900,522 1136,448" fill="none" stroke="#0ca678" stroke-width="1.6" marker-end="url(#ah)"/>
+    <text x="680" y="560" font-size="10.5" fill="#12b886">write</text>
+    <path d="M555,578 C780,578 950,556 1138,544" fill="none" stroke="#0ca678" stroke-width="1.6" marker-end="url(#ah)"/>
+    <text x="820" y="576" font-size="10.5" fill="#12b886">write</text>
+    <path d="M820,578 C950,578 1050,632 1138,666" fill="none" stroke="#0ca678" stroke-width="1.6" marker-end="url(#ah)"/>
+    <text x="985" y="602" font-size="10.5" fill="#12b886">write</text>
+
+    <!-- state file read (B2) -->
+    <path d="M1480,515 L1485,515 L1485,332 L485,332 L485,314" fill="none" stroke="#868e96" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ahg)"/>
+    <text x="1160" y="326" font-size="10.5" fill="#868e96">read state</text>
+
+    <!-- S3 -> U3 -->
+    <path d="M1480,660 L1485,660 L1485,810 L905,810 L905,818" fill="none" stroke="#0c8599" stroke-width="1.6" marker-end="url(#ah)"/>
+    <text x="1180" y="772" font-size="10.5" fill="#0c8599">settings.describe() read</text>
+
+    <!-- S1 -> U2 -->
+    <path d="M1480,390 L1485,390 L1485,890 L702,890" fill="none" stroke="#0c8599" stroke-width="1.6" marker-end="url(#ah)"/>
+    <text x="1150" y="882" font-size="10.5" fill="#0c8599">read (settings mirror / describe)</text>
+
+    <!-- ================= INNER EDGES ================= -->
+    <path d="M240,124 L268,124" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <path d="M440,124 L468,124" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <path d="M660,124 L688,124" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <path d="M820,156 L820,210 L200,210 L200,250" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <path d="M200,312 L200,340 L360,340 L360,358" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <path d="M485,312 L485,358" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <path d="M770,312 L770,342 L640,342 L640,358" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <path d="M380,520 L185,520 L185,546" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <path d="M485,520 L485,546" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <path d="M620,520 L620,546" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+    <path d="M700,448 L940,448 L940,546" fill="none" stroke="#495057" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ahg)"/>
+    <path d="M820,569 L843,569" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah)"/>
+
+    <!-- ================= UI LANE ================= -->
+    <g class="node" data-label="U1">
+      <rect x="40" y="820" width="300" height="130" rx="10" fill="#e3fafc" stroke="#0c8599" stroke-width="1.6"/>
+      <text x="190" y="848" font-size="12.5" font-weight="700" text-anchor="middle" fill="#0b7285">PLUGINS PAGE (ui-plugin-manager)</text>
+      <text x="190" y="870" font-size="11.5" text-anchor="middle" fill="#1098ad">card 'dsh-model-sync' · row</text>
+      <text x="190" y="888" font-size="11.5" text-anchor="middle" fill="#1098ad">'model-sync' — toggle off → on</text>
+      <text x="190" y="906" font-size="11.5" text-anchor="middle" fill="#1098ad">= manual re-enable (fresh apply)</text>
+      <text x="190" y="930" font-size="10.5" text-anchor="middle" fill="#0b7285">runs one activation sync again</text>
+    </g>
+    <g class="node" data-label="U2">
+      <rect x="390" y="820" width="310" height="130" rx="10" fill="#e3fafc" stroke="#0c8599" stroke-width="1.6"/>
+      <text x="545" y="848" font-size="12.5" font-weight="700" text-anchor="middle" fill="#0b7285">SETTINGS → MODELS</text>
+      <text x="545" y="870" font-size="11.5" text-anchor="middle" fill="#1098ad">(ui-settings-models) + model</text>
+      <text x="545" y="888" font-size="11.5" text-anchor="middle" fill="#1098ad">dropdown render the llm-pi-ai</text>
+      <text x="545" y="906" font-size="11.5" text-anchor="middle" fill="#1098ad">section's providers·models — every</text>
+      <text x="545" y="924" font-size="11.5" text-anchor="middle" fill="#1098ad">synced model appears automatically</text>
+    </g>
+    <g class="node" data-label="U3">
+      <rect x="750" y="820" width="310" height="150" rx="10" fill="#e3fafc" stroke="#0c8599" stroke-width="1.6"/>
+      <text x="905" y="846" font-size="12.5" font-weight="700" text-anchor="middle" fill="#0b7285">LAST SYNC PANEL (client.js)</text>
+      <text x="905" y="868" font-size="11" text-anchor="middle" fill="#1098ad">injected into 'plugins.bundle.config'</text>
+      <text x="905" y="885" font-size="11" text-anchor="middle" fill="#1098ad">keyed slot (dsh-model-sync)</text>
+      <text x="905" y="904" font-size="11" text-anchor="middle" fill="#1098ad">reads 'model-sync' ns via</text>
+      <text x="905" y="921" font-size="11" text-anchor="middle" fill="#1098ad">remote.settings.describe()</text>
+      <text x="905" y="940" font-size="11" text-anchor="middle" fill="#1098ad">refreshes on settings/</text>
+      <text x="905" y="957" font-size="11" text-anchor="middle" fill="#1098ad">document-updated + connection/reset</text>
+    </g>
+
+    <!-- U1 -> A1: manual re-enable -->
+    <path d="M40,890 L18,890 L18,124 L38,124" fill="none" stroke="#0c8599" stroke-width="1.8" marker-end="url(#ah)"/>
+    <text x="13" y="500" font-size="11" fill="#0c8599" transform="rotate(-90 13 500)" text-anchor="middle">manual re-enable (toggle off → on)</text>
+  </svg>
+  <figcaption>
+    <b>Figure 1 — End-to-end sync flow.</b> Numbered badges follow the walkthrough (§4). Dashed arrows are reads /
+    references; solid arrows are control/data flow.
+  </figcaption>
+</figure>
+
+<div class="legend">
+  <span><span class="sw" style="background:#d3f9d8"></span> activation entry / trigger</span>
+  <span><span class="sw" style="background:#e7f0ff"></span> host pipeline step</span>
+  <span><span class="sw" style="background:#fff4e6;border-color:#f76707"></span> merge / decision</span>
+  <span><span class="sw" style="background:#e6fcf5"></span> persistence write</span>
+  <span><span class="sw" style="background:#f3e8ff"></span> external source</span>
+  <span><span class="sw" style="background:#fff9db;border-color:#fab005"></span> storage</span>
+  <span><span class="sw" style="background:#e3fafc"></span> web-UI component</span>
+  <span><span class="sw" style="background:#fff;border:1.5px dashed #748ffc"></span> one sync pass</span>
+</div>
+
+<h2 id="walkthrough">4 · End-to-end walkthrough</h2>
+<ol style="font-size:.95rem">
+  <li><span class="badge">1</span> <b>Entry activates.</b> The bundle's patch (<code>cordis.patch.yml</code>) inserts
+      a profile entry <code>model-sync</code> → package <code>dsh-model-sync</code>. Its <code>apply(ctx, config)</code>
+      runs on first boot and on every manual re-enable from the Plugins page (<a href="#integration">see U1</a>).</li>
+  <li><span class="badge">2</span> <b>Wait for services.</b> <code>ctx.inject(['llm', 'settings'], …)</code> holds the
+      fiber until both the <code>llm</code> runtime and the <code>settings</code> service are available.</li>
+  <li><span class="badge">3</span> <b>Register the outcome namespace.</b> <code>sctx.settings.register('model-sync', PROVENANCE_SCHEMA)</code>
+      declares the <code>model-sync</code> settings entry that will hold <code>lastSync</code> (the UI-facing outcome).</li>
+  <li><span class="badge">4</span> <b>Schedule.</b> An activation sync runs 1.5&nbsp;s after services are ready
+      (<code>setTimeout</code>, cleared on dispose). With <code>intervalMinutes &gt; 0</code>, a
+      <code>setInterval</code> additionally repeats the pass every N minutes. Disposal (disable/unmount) clears both timers.</li>
+  <li><span class="badge">5</span> <b>Read configuration.</b> <code>syncProviders()</code> clones the
+      <code>llm-pi-ai</code> settings section (<code>structuredClone</code>) and validates that <code>providers</code>
+      exists. A pre-0.7.0 document that still stored the rejection baseline under <code>providers</code> is migrated:
+      baseline → state file, key stripped from settings.</li>
+  <li><span class="badge">6</span> <b>Load state.</b> <code>loadStateFile()</code> reads the JSON state file
+      (default <code>&lt;dshHome&gt;/storages/model-sync/state.json</code>). A missing or corrupt file yields an empty
+      baseline — the rejections are derived bookkeeping, so losing them only re-adds previously rejected ids once.</li>
+  <li><span class="badge">7</span> <b>Discover advertised models.</b> For each selected provider (all of them unless
+      <code>config.providers</code> restricts; a missing <code>baseURL</code> skips it with a note), the plugin calls
+      <code>llm.discoverModels('llm-pi-ai', {provider, baseURL, api})</code>. The llm-pi-ai host plugin answers
+      catalog routes <b>from the installed pi-ai catalog</b> (zero network; includes capacities) and other routes by
+      interrogating the endpoint (<code>GET {baseURL}/models</code> for OpenAI-compatible protocols,
+      <code>{root}/v1/models?limit=1000</code> for Anthropic Messages; replies bounded to 4&nbsp;MiB, JSON parsed with
+      tolerance for malformed rows). A discovery failure never fails the pass — the provider is skipped with a warning.</li>
+  <li><span class="badge">8</span> <b>Merge.</b> The pass diffs, per provider, the advertised ids against the section's
+      <code>models[]</code> applying the add / prune / reject rules (§5) and updating the in-memory
+      <code>lastOwned</code> baseline for the next run.</li>
+  <li><span class="badge">9</span> <b>Write the section when needed.</b> If any provider's models changed,
+      <code>settings.replace('llm-pi-ai', work)</code> persists the updated document (the working copy is
+      <i>spread, not rebuilt</i>, so hand-entered ids/order/capacities survive and the pi-ai schema fills defaults).</li>
+  <li><span class="badge">10</span> <b>Write the state file when needed.</b> Rejection-list changes are saved to the
+      plugin state file — never to the settings document (settings are user configuration; rejections are sync bookkeeping).</li>
+  <li><span class="badge">11</span> <b>Persist the outcome (activation only).</b> Activation passes store
+      <code>lastSync = { at, providers: { P: { added, deleted } } }</code> into the <code>model-sync</code> namespace and
+      print the per-provider summary log line. Interval passes keep their notes in the log only and leave
+      <code>lastSync</code> untouched.</li>
+  <li><span class="badge">12</span> <b>Log.</b> Every pass logs its trigger (<code>[dsh-model-sync] activation sync: …</code>
+      / <code>… interval sync: …</code>) with per-provider outcome notes; activation passes add the summary line.</li>
+</ol>
+<p>
+On the read side, the <b>Settings → Models</b> page and the model dropdown (U2) render the <code>llm-pi-ai</code>
+section — the sync's payoff — while the <b>Last sync</b> panel (U3) reads the <code>model-sync</code> outcome via
+<code>remote.settings.describe()</code> and refreshes itself on <code>settings/document-updated</code> (emitted on every
+namespace write) and connection resets, so it is live ≈1.5&nbsp;s after the re-enable that triggered the pass.
+</p>
+
+<h2 id="rules">5 · Sync rules — decision diagram</h2>
+<p>
+Three rules govern every model entry, with provenance carried by the per-entry <code>owner</code> marker
+(<code>'model-sync'</code> = auto-added; absent = hand-entered). The small diagram below is the exact decision logic
+<code>syncProviders()</code> applies per provider.
+</p>
+
+<figure>
+  <svg viewBox="0 0 1440 780" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sync rules decision diagram">
+    <defs>
+      <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+              orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#495057"/>
+      </marker>
+    </defs>
+
+    <!-- ======== BAND A: ADDS ======== -->
+    <line x1="40" y1="50" x2="1400" y2="50" stroke="#dee2e6" stroke-width="1"/>
+    <text x="48" y="40" font-size="12.5" font-weight="700" fill="#1c7ed6">A · ADDS — ids advertised but not configured</text>
+
+    <g class="node" data-label="A0">
+      <rect x="40" y="80" width="300" height="56" rx="9" fill="#e7f0ff" stroke="#4263eb" stroke-width="1.5"/>
+      <text x="190" y="102" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">advertised model id D</text>
+      <text x="190" y="120" font-size="11.5" text-anchor="middle" fill="#3b5bdb">(discovery listing, this pass)</text>
+    </g>
+
+    <g class="node" data-label="D1">
+      <rect x="420" y="72" width="230" height="76" rx="12" fill="#fff4e6" stroke="#f76707" stroke-width="1.6"/>
+      <text x="535" y="96" font-size="12" font-weight="600" text-anchor="middle" fill="#d9480f">D already in section</text>
+      <text x="535" y="113" font-size="12" font-weight="600" text-anchor="middle" fill="#d9480f">models[] ?</text>
+      <text x="535" y="134" font-size="10.5" text-anchor="middle" fill="#e8590c">existingIds has D</text>
+    </g>
+
+    <g class="node" data-label="KEEP">
+      <rect x="780" y="52" width="280" height="58" rx="9" fill="#f1f3f5" stroke="#868e96" stroke-width="1.3"/>
+      <text x="920" y="74" font-size="12" font-weight="600" text-anchor="middle" fill="#495057">KEEP — untouched</text>
+      <text x="920" y="92" font-size="11" text-anchor="middle" fill="#6c757d">never rewritten: id, order, capacities</text>
+    </g>
+
+    <g class="node" data-label="D2">
+      <rect x="780" y="210" width="230" height="76" rx="12" fill="#fff4e6" stroke="#f76707" stroke-width="1.6"/>
+      <text x="895" y="234" font-size="12" font-weight="600" text-anchor="middle" fill="#d9480f">D in rejected list</text>
+      <text x="895" y="251" font-size="12" font-weight="600" text-anchor="middle" fill="#d9480f">(state file)?</text>
+      <text x="895" y="272" font-size="10.5" text-anchor="middle" fill="#e8590c">remembered deletion</text>
+    </g>
+
+    <g class="node" data-label="SKIP">
+      <rect x="1100" y="196" width="290" height="58" rx="9" fill="#ffe3e3" stroke="#e03131" stroke-width="1.3"/>
+      <text x="1245" y="218" font-size="12" font-weight="600" text-anchor="middle" fill="#c92a2a">SKIP — not re-added</text>
+      <text x="1245" y="236" font-size="11" text-anchor="middle" fill="#e8590c">user deleted it deliberately;</text>
+      <text x="1245" y="250" font-size="11" text-anchor="middle" fill="#e8590c">cleared only by manual re-add</text>
+    </g>
+
+    <g class="node" data-label="ADD">
+      <rect x="1100" y="322" width="290" height="70" rx="9" fill="#e7f5ff" stroke="#1c7ed6" stroke-width="1.6"/>
+      <text x="1245" y="346" font-size="12.5" font-weight="700" text-anchor="middle" fill="#1864ab">ADD — append entry</text>
+      <text x="1245" y="366" font-size="11" text-anchor="middle" fill="#1c7ed6">{ id: D, owner: 'model-sync',</text>
+      <text x="1245" y="382" font-size="11" text-anchor="middle" fill="#1c7ed6">name?, contextWindow?, maxTokens?, input? }</text>
+    </g>
+
+    <path d="M340,108 L418,108" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <path d="M535,148 L535,180 L895,180 L895,208" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <text x="547" y="172" font-size="10.5" fill="#6c757d">no</text>
+    <path d="M650,110 L778,98" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <text x="700" y="94" font-size="10.5" fill="#6c757d">yes</text>
+    <path d="M895,286 L895,300 L1245,300 L1245,320" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <text x="907" y="292" font-size="10.5" fill="#6c757d">no</text>
+    <path d="M1010,248 L1098,236" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <text x="1048" y="230" font-size="10.5" fill="#6c757d">yes</text>
+
+    <!-- ======== BAND B: PRUNE ======== -->
+    <line x1="40" y1="430" x2="1400" y2="430" stroke="#dee2e6" stroke-width="1"/>
+    <text x="48" y="420" font-size="12.5" font-weight="700" fill="#e64980">B · PRUNE — owned ids the listing no longer reports (opt-in)</text>
+
+    <g class="node" data-label="B0">
+      <rect x="40" y="460" width="300" height="56" rx="9" fill="#e7f0ff" stroke="#4263eb" stroke-width="1.5"/>
+      <text x="190" y="482" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1c2b5e">owned entry E in section</text>
+      <text x="190" y="500" font-size="11.5" text-anchor="middle" fill="#3b5bdb">(owner === 'model-sync')</text>
+    </g>
+
+    <g class="node" data-label="D3">
+      <rect x="420" y="452" width="230" height="76" rx="12" fill="#fff4e6" stroke="#f76707" stroke-width="1.6"/>
+      <text x="535" y="476" font-size="12" font-weight="600" text-anchor="middle" fill="#d9480f">E still advertised</text>
+      <text x="535" y="493" font-size="12" font-weight="600" text-anchor="middle" fill="#d9480f">this pass?</text>
+      <text x="535" y="514" font-size="10.5" text-anchor="middle" fill="#e8590c">discoveredIds has E</text>
+    </g>
+
+    <g class="node" data-label="KEEP2">
+      <rect x="740" y="452" width="220" height="58" rx="9" fill="#f1f3f5" stroke="#868e96" stroke-width="1.3"/>
+      <text x="850" y="474" font-size="12" font-weight="600" text-anchor="middle" fill="#495057">KEEP</text>
+      <text x="850" y="492" font-size="11" text-anchor="middle" fill="#6c757d">baseline updated for next sync</text>
+    </g>
+
+    <g class="node" data-label="PRUNE">
+      <rect x="1100" y="432" width="290" height="56" rx="9" fill="#fff0f6" stroke="#e64980" stroke-width="1.5"/>
+      <text x="1245" y="454" font-size="12.5" font-weight="700" text-anchor="middle" fill="#c2255c">REMOVE from models[]</text>
+      <text x="1245" y="473" font-size="11" text-anchor="middle" fill="#e64980">counted as deleted in outcome</text>
+    </g>
+
+    <g class="node" data-label="KEEP3">
+      <rect x="1100" y="516" width="290" height="56" rx="9" fill="#f1f3f5" stroke="#868e96" stroke-width="1.3"/>
+      <text x="1245" y="538" font-size="12" font-weight="600" text-anchor="middle" fill="#495057">KEEP — stale owned id stays</text>
+      <text x="1245" y="557" font-size="11" text-anchor="middle" fill="#6c757d">cleanup is opt-in (prune: true)</text>
+    </g>
+
+    <path d="M340,488 L418,488" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <path d="M650,490 L738,482" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <text x="702" y="468" font-size="10.5" fill="#6c757d">yes</text>
+    <path d="M535,528 L535,596 H1080" fill="none" stroke="#495057" stroke-width="1.6"/>
+    <text x="547" y="556" font-size="10.5" fill="#6c757d">no</text>
+    <path d="M1080,596 L1080,460 L1100,460" fill="none" stroke="#e64980" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <path d="M1080,544 L1100,544" fill="none" stroke="#868e96" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <text x="977" y="468" font-size="10.5" fill="#c2255c">prune: true</text>
+    <text x="977" y="556" font-size="10.5" fill="#6c757d">prune: false</text>
+
+    <!-- ======== BAND C: REJECT ======== -->
+    <line x1="40" y1="646" x2="1400" y2="646" stroke="#dee2e6" stroke-width="1"/>
+    <text x="48" y="636" font-size="12.5" font-weight="700" fill="#e03131">C · DELIBERATE-DELETION DETECTION — remember removals so the sync stops resurrecting them</text>
+
+    <g class="node" data-label="C0">
+      <rect x="40" y="676" width="320" height="68" rx="9" fill="#e7f0ff" stroke="#4263eb" stroke-width="1.5"/>
+      <text x="200" y="698" font-size="12" font-weight="600" text-anchor="middle" fill="#1c2b5e">id owned at previous sync</text>
+      <text x="200" y="715" font-size="11.5" text-anchor="middle" fill="#3b5bdb">absent from section now, but still</text>
+      <text x="200" y="731" font-size="11.5" text-anchor="middle" fill="#3b5bdb">advertised — owner marker gone</text>
+    </g>
+
+    <g class="node" data-label="RE">
+      <rect x="500" y="676" width="520" height="68" rx="9" fill="#ffe3e3" stroke="#e03131" stroke-width="1.6"/>
+      <text x="760" y="697" font-size="12.5" font-weight="700" text-anchor="middle" fill="#c92a2a">REJECT — append id to the per-provider rejected list in the state file</text>
+      <text x="760" y="716" font-size="11" text-anchor="middle" fill="#e8590c">sync skips rejected ids forever after — detection diffs consecutive syncs,</text>
+      <text x="760" y="731" font-size="11" text-anchor="middle" fill="#e8590c">so it is live only with intervalMinutes &gt; 0; manual re-add clears the rejection</text>
+    </g>
+    <path d="M360,710 L498,710" fill="none" stroke="#495057" stroke-width="1.6" marker-end="url(#ah2)"/>
+
+    <text x="48" y="756" font-size="11" fill="#6c757d">Never-rewrite rule: entries the plugin added carry owner:'model-sync'; hand-entered entries carry no owner and are never rewritten or pruned.</text>
+  </svg>
+  <figcaption><b>Figure 2 — Per-model decision logic.</b> A = adopt new ids · B = prune stale owned ids · C = detect deliberate deletions.</figcaption>
+</figure>
+
+<h3>Rule semantics</h3>
+<ul style="font-size:.95rem">
+  <li><b>Adds.</b> Advertised ids that are not configured and not rejected are appended as
+      <code>{ id, owner: 'model-sync', … }</code>, with <code>name</code> / <code>contextWindow</code> /
+      <code>maxTokens</code> / <code>input</code> copied when the listing reports them. Owner-marked entries are the
+      only ones the plugin may later prune.</li>
+  <li><b>Prune</b> (<code>prune: true</code>). Entries owned by the plugin whose id is no longer advertised are removed
+      from <code>models[]</code> and reported as <code>deleted</code>. Hand-entered entries are never pruned — without
+      the marker there is no evidence the plugin may remove them.</li>
+  <li><b>Rejected.</b> A plugin-owned id that disappears from the section between two consecutive syncs while still
+      being advertised is treated as a deliberate hand deletion: it is recorded in the plugin state file and never
+      re-added. Rejections are the plugin's own bookkeeping, so they live in the state file — not in the settings
+      document, which holds only user configuration plus the UI-rendered <code>lastSync</code>. Manually re-adding a
+      rejected id clears its rejection. Because detection diffs <i>consecutive</i> syncs inside one activation, it only
+      stays live with a positive <code>intervalMinutes</code>; a re-enable resets the in-memory baseline, so a single
+      activation sync re-adds a deleted id.</li>
+</ul>
+
+<h2 id="lifecycle">6 · Lifecycle &amp; triggers</h2>
+<table>
+  <tr><th>Trigger</th><th>When</th><th>What runs</th><th>Persists lastSync?</th><th>Summary log?</th></tr>
+  <tr><td><b>boot</b></td><td>first plugin activation</td><td>activation sync (+1.5 s settle)</td><td>yes</td><td>yes</td></tr>
+  <tr><td><b>manual re-enable</b></td><td>Plugins page: toggle <code>model-sync</code> off → on</td><td>fresh apply → activation sync (+1.5 s)</td><td>yes</td><td>yes</td></tr>
+  <tr><td><b>interval</b> (<code>intervalMinutes &gt; 0</code>)</td><td>every N minutes</td><td>interval sync (notes only)</td><td>no</td><td>no</td></tr>
+  <tr><td><b>dispose</b> (disable / unmount)</td><td>toggle off, profile unload, shutdown</td><td>fiber teardown clears settle + interval timers</td><td>—</td><td>—</td></tr>
+</table>
+<p style="font-size:.95rem">
+The sync body is single-flight: a <code>running</code> guard drops re-entrant passes. The hosted
+objectives tests demonstrate the lifecycle corners: disposing before the 1.5&nbsp;s settle timer fires suppresses the
+sync entirely; disposing mid-sync lets the old fiber finish writing while the new fiber runs its own pass (final state
+consistent); rapid toggles within the settle window yield exactly one sync from the surviving fiber; a re-enabled
+fiber with <code>intervalMinutes &gt; 0</code> restarts both activation and interval scheduling; a failing provider is
+skipped without failing the whole pass.
+</p>
+
+<h2 id="interactions">7 · Components &amp; how they interact</h2>
+<h3>Host half — <code>index.js</code></h3>
+<ul style="font-size:.95rem">
+  <li><code>apply(ctx, config)</code> resolves config (<code>intervalMinutes</code>, <code>prune</code>,
+      <code>providers</code>, <code>stateFile</code>), resolves the state-file path
+      (<code>config.stateFile</code> → <code>ctx.get('dshHomePath')(rel)</code> → <code>$DSH_HOME</code>/<code>~/.dsh</code>),
+      then registers the timetable via <code>ctx.inject(['llm', 'settings'], …)</code>.</li>
+  <li>Service contracts relied upon: <code>settings.register(ns, schema)</code> → namespace scope with
+      <code>replace()</code>; <code>settings.get(ns)</code> / <code>settings.replace(ns, value)</code>;
+      <code>llm.discoverModels(ns, {provider, baseURL, api})</code>; <code>ctx.logger</code>. (See §12 for a contract
+      note on the settings surface.)</li>
+  <li><code>syncProviders()</code> owns the merge, the three write targets, and the outcome summaries. It is pure
+      bookkeeping over JSON data — no network, no LLM calls — everything external is delegated to
+      <code>llm.discoverModels</code>.</li>
+</ul>
+<h3>Client half — <code>client.js</code></h3>
+<ul style="font-size:.95rem">
+  <li>Registers a module with <code>window.__ModuleLoader__</code> and injects
+      <code>['slots', 'locale', 'remote', 'remote.settings']</code>.</li>
+  <li><code>LastSyncPanel</code> renders the <i>Last sync</i> panel between the bundle's description and its component
+      list: a header with the run time and one line per provider ("+2 models: a, b" / "-1 model: gone" /
+      "no models added or removed"), localized en/zh.</li>
+  <li><code>createLastSyncSource()</code> is a snapshot source over the <code>model-sync</code> namespace. It reads via
+      <code>ctx.remote.settings.describe()</code> rather than a bound settings mirror deliberately: the mirror is
+      unavailable on non-loopback origins (memory persistence), while <code>describe()</code> is served to every trusted
+      origin. It refreshes on the same signals the mirror subscribes to (<code>settings/document-updated</code>,
+      <code>connection/reset</code>), so the panel stays live after a toggle.</li>
+  <li>The slot seat uses <code>ctx.slots.inject('plugins.bundle.config', …)</code> keyed <code>'dsh-model-sync'</code>
+      rather than a bare registration because the seat is declared only once ui-plugin-manager's own entry realizes its
+      'main' registration — a bare register at apply time would throw "slot is not declared".</li>
+</ul>
+<h3>Composition &amp; packaging</h3>
+<ul style="font-size:.95rem">
+  <li><code>cordis.patch.yml</code> — bundle-shipped insert patch adding the <code>model-sync</code> entry with defaults
+      (<code>intervalMinutes: 0</code>, <code>prune: false</code>); hosts merge it into the profile composition.</li>
+  <li><code>package.json → dsh.bundle</code> — tells the harness where the patch is, that the client half is a web
+      bundle, and which client packages it depends on (ui-settings for the describe surface, locale for dictionaries).</li>
+</ul>
+
+<h2 id="storage">8 · Data &amp; persistence layout</h2>
+<table>
+  <tr><th>Store</th><th>Location</th><th>Holds</th><th>Written by</th><th>Read by</th></tr>
+  <tr>
+    <td>`llm-pi-ai` settings entry</td>
+    <td>profile settings document</td>
+    <td><code>providers[P].models[]</code> — entries with <code>owner</code> markers + capacities</td>
+    <td>plugin, only when models changed</td>
+    <td>Settings → Models page, model dropdown, pi-ai adapter configuration</td>
+  </tr>
+  <tr>
+    <td>`model-sync` settings entry</td>
+    <td>profile settings document</td>
+    <td><code>lastSync</code> outcome (<code>at</code> + per-provider added/deleted)</td>
+    <td>plugin, activation passes only</td>
+    <td>Last sync panel (client.js)</td>
+  </tr>
+  <tr>
+    <td>plugin state file</td>
+    <td><code>&lt;dshHome&gt;/storages/model-sync/state.json</code> (configurable)</td>
+    <td>per-provider <code>rejected</code> id lists (+ migrated legacy baseline)</td>
+    <td>plugin, only when rejections changed</td>
+    <td>plugin, every sync pass</td>
+  </tr>
+</table>
+<p style="font-size:.95rem">
+The split is principled: the settings document is <b>user configuration</b> (the sync writes only merged model lists
+and the UI-facing outcome), while the rejection baseline is <b>plugin bookkeeping</b> and stays out of it. Provenance
+for pruning rides on the per-entry <code>owner</code> marker — a single source, no duplicated model list. Entries
+configured before this version carry no owner and are treated as hand-entered; clearing a provider's <code>models</code>
+and letting the plugin rebuild gives every entry full tracking.
+</p>
+
+<h2 id="config">9 · Configuration reference</h2>
+<table>
+  <tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
+  <tr><td><code>intervalMinutes</code></td><td><code>0</code></td>
+      <td>0 = one sync per activation (boot or re-enable); N &gt; 0 = also repeat every N minutes. A positive value
+          enables deletion detection (rejected-list bookkeeping).</td></tr>
+  <tr><td><code>prune</code></td><td><code>false</code></td>
+      <td>true = remove <code>owner: 'model-sync'</code> entries whose id is no longer advertised. Hand-entered entries
+          are never pruned.</td></tr>
+  <tr><td><code>providers</code></td><td>(all llm-pi-ai providers)</td>
+      <td>Optional list of provider names to restrict the sync to.</td></tr>
+  <tr><td><code>stateFile</code></td><td><code>&lt;dshHome&gt;/storages/model-sync/state.json</code></td>
+      <td>Path for the rejection-baseline state file (resolved via <code>dshHomePath</code>, <code>$DSH_HOME</code>,
+          or <code>~/.dsh</code>).</td></tr>
+</table>
+
+<h2 id="testing">10 · Testing</h2>
+<p style="font-size:.95rem">
+<code>npm test</code> runs both suites under <code>node --test</code> with fake timers (requires Node ≥ 20.4;
+≥ 21.3 silences the flag warning). The fake harness mocks <code>ctx.get</code> / <code>ctx.inject</code> with a
+settings store, a canned <code>discoverModels</code>, a per-test temp <code>dshHomePath</code>, and timer disposers —
+mirroring the real loader's fiber semantics so disable/re-enable can be simulated. <b>17/17 tests pass</b>.
+</p>
+<ul style="font-size:.95rem">
+  <li><b>index.test.js</b> — boot activation sync discovers and writes once; re-enable runs a fresh activation sync;
+      interval repeats with an interval trigger (and writes nothing up-to-date); activation summaries list added /
+      pruned ids or "no models added or removed"; persisted rejections survive a re-enable; interval detection records a
+      deliberate deletion in the state file (never settings); legacy documents migrate their baseline; prune removes
+      owned-but-vanished ids and never hand-entered ones; empty sections log "nothing to sync" and write nothing.</li>
+  <li><b>index.edge.test.js</b> — dispose before the settle timer suppresses the sync and re-enable runs exactly one;
+      dispose mid-sync keeps both fibers consistent; rapid toggles yield exactly one sync from the final fiber;
+      re-enable resets the deletion baseline (deleted id is re-added); disposal clears the interval and re-enable
+      restarts it; one failing provider never rejects the pass while healthy providers still sync.</li>
+</ul>
+
+<h2 id="integration">11 · Harness integration points (verified)</h2>
+<p style="font-size:.95rem">
+I verified the plugin's environment contracts against the running harness checkout
+(<code>/home/user1/deepseek-harness</code>, settings package 0.1.7-rc.2):
+</p>
+<table>
+  <tr><th>Contract</th><th>Verified in harness</th></tr>
+  <tr><td><code>llm.discoverModels(settingsNs, request)</code> — discovery RPC dispatches to the namespace's registered
+      discovery; llm-pi-ai registers it and answers catalog routes from the installed catalog, others over the wire</td>
+      <td><code>packages/llm/llm/src/index.ts</code> (LlmRuntime.discoverModels),
+          <code>packages/llm/llm-pi-ai/src/index.ts</code> (registerModelDiscovery),
+          <code>packages/llm/llm-pi-ai/src/discovery.ts</code> (catalog-first, bounded 4 MiB reads, protocol filtering)</td></tr>
+  <tr><td>Settings namespaces = profile entry ids; writes via replace/update; <code>settings/document-updated</code>
+      event emitted on every describe-driven revision change</td>
+      <td><code>packages/settings/settings/src/index.ts</code> (SettingsForms),
+          <code>packages/settings/settings/src/types.ts</code> (event)</td></tr>
+  <tr><td>Settings → Models page renders configurable-provider directory entries keyed by <code>settingsNs</code>
+      (llm-pi-ai section)</td>
+      <td><code>packages/client/ui-settings-models/src/client/slot-contract.ts</code>,
+          <code>store.ts</code>, <code>operations.ts</code></td></tr>
+  <tr><td>Keyed <code>plugins.bundle.config</code> client slot (the Last sync panel seat)</td>
+      <td><code>packages/client/ui-plugin-manager/src/client/slot-contract.ts</code>,
+          <code>config-ledger.ts</code></td></tr>
+  <tr><td><code>dshHomePath</code> helper (state-file resolution)</td>
+      <td><code>packages/util/home-paths/src/index.ts</code></td></tr>
+</table>
+<p style="font-size:.95rem">
+Deployment: the running <code>web</code> profile mounts this repo by symlink
+(<code>~/.dsh/profiles/web/node_modules/dsh-model-sync → /home/user1/dsh-model-sync</code>) and enables the entry
+(<code>cordis.patch.yml</code>: <code>- id: model-sync, disabled: false</code>); the profile's <code>llm-pi-ai</code>
+section contains models marked <code>owner: model-sync</code> (deb4090, amd-server …), consistent with this plugin
+having populated it.
+</p>
+
+<h2 id="contract">12 · Contract notes &amp; compatibility observations</h2>
+<div class="ok">
+<b>Verified match.</b> Every integration point except the host-side settings API matches the current harness: the
+<code>llm.discoverModels</code> signature, namespaces-as-entry-ids, the <code>plugins.bundle.config</code> keyed slot,
+the <code>settings/document-updated</code> event, and the <code>dshHomePath</code> helper.
+</div>
+<div class="note">
+<b>Host-side settings surface.</b> The plugin's host code and its tests assume a settings contract of
+<code>settings.register(ns, schema)</code> → namespace scope with <code>replace()</code>, plus
+<code>settings.get(ns)</code> and <code>settings.replace(ns, value)</code>. The current harness
+<code>SettingsForms</code> (0.1.7-rc.2) exposes <code>describe / update / replace / mutate / configure</code> — with no
+<code>get(ns)</code> and no <code>register(ns, schema)</code> scope API. The plugin therefore targets an older (or
+idealized) settings surface; wiring it against the current host would need that surface adapted (e.g. reading via
+<code>describe()</code> and writing via <code>replace(ns, …)</code>). The client half is current: it deliberately
+reads through <code>remote.settings.describe()</code> because the mirror is unavailable on non-loopback origins.
+</div>
+<p style="font-size:.9rem;color:var(--muted)">
+Report generated from the repo at /home/user1/dsh-model-sync (head <code>c0ddddf</code>, v0.7.1) with harness
+cross-references from /home/user1/deepseek-harness. Diagrams are self-contained SVG embedded in this single file — no
+external assets or scripts.
+</p>
+
+</main>
+</body>
+</html>
