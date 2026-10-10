@@ -42,23 +42,13 @@ function harness(section, models) {
   const calls = { discover: 0, replace: 0, update: 0, logs: [] }
   const disposers = []
   const settings = {
-    register(ns) {
-      return {
-        get: () => store.get(ns),
-        update: async (patch) => {
-          store.set(ns, { ...(store.get(ns) ?? {}), ...patch })
-          calls.update += 1
-        },
-        replace: async (section) => {
-          store.set(ns, section)
-          calls.update += 1
-        },
-      }
-    },
-    get: (ns) => store.get(ns),
+    // Post-refactor settings API: a section is read from the `describe()`
+    // projection and written with `replace(ns, section)`.
+    describe: () => [...store.entries()].map(([ns, value]) => ({ ns, value })),
     replace: async (ns, value) => {
       store.set(ns, value)
-      calls.replace += 1
+      if (ns === 'llm-pi-ai') calls.replace += 1
+      else calls.update += 1
     },
   }
   const llm = {

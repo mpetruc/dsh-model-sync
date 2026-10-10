@@ -66,20 +66,53 @@ const PROVENANCE_NS = 'model-sync'
 const OWNER = 'model-sync'
 
 /**
+ * One sync pass' outcome shape, rendered on the bundle's Plugins page.
+ */
+const LAST_SYNC_SCHEMA = z.object({
+  at: z.string(),
+  providers: z.dict(z.object({
+    added: z.array(z.string()).default([]),
+    deleted: z.array(z.string()).default([]),
+  })).default({}),
+})
+
+/**
  * Namespace schema: the last activation pass' outcome (`lastSync`) the
  * bundle's Plugins page displays. The rejection baseline used to live here;
  * it moved to the state file in 0.7.0 (see {@link loadStateFile}), so a
  * legacy `providers` key is migrated at the next sync.
  */
 const PROVENANCE_SCHEMA = z.object({
-  lastSync: z.object({
-    at: z.string(),
-    providers: z.dict(z.object({
-      added: z.array(z.string()).default([]),
-      deleted: z.array(z.string()).default([]),
-    })).default({}),
-  }).required(false),
+  lastSync: LAST_SYNC_SCHEMA.required(false),
 })
+
+/**
+ * Plugin Config schema. The sync knobs (`intervalMinutes`, `prune`,
+ * `providers`, `stateFile`) are ordinary config the bundle patch owns;
+ * `lastSync` is the sole volatile field, so the plugin can persist the last
+ * activation outcome to its own entry and the Plugins page can read it back
+ * through `settings.describe()`. Declaring a Config schema is also what makes
+ * the `model-sync` entry configurable in the post-refactor settings service.
+ */
+export const Config = z.object({
+  intervalMinutes: z.number().default(0),
+  prune: z.boolean().default(false),
+  providers: z.array(z.string()).required(false),
+  stateFile: z.string().required(false),
+  lastSync: LAST_SYNC_SCHEMA.required(false).volatile(),
+})
+
+/**
+ * Read one namespace's live section from the settings service. The
+ * post-refactor settings API has no `get`; a section is read from the
+ * descriptor the `describe()` projection returns.
+ * @param settings - the settings service.
+ * @param ns - the profile entry id (namespace) to read.
+ * @returns the live section, or undefined when the entry is not configurable.
+ */
+function readSection(settings, ns) {
+  return settings.describe().find((row) => row.ns === ns)?.value
+}
 
 /** Default state-file location under the harness home. */
 const STATE_FILE_REL = join('storages', 'model-sync', 'state.json')
@@ -170,11 +203,11 @@ export function apply(ctx, config = {}) {
   // diffing against this baseline is what detects a deliberate deletion.
   const lastOwned = new Map()
 
-  const syncOnce = async (scope, reason) => {
+  const syncOnce = async (reason) => {
     if (running) return
     running = true
     try {
-      await syncProviders(ctx, wanted, prune, scope, lastOwned, reason, stateFile)
+      await syncProviders(ctx, wanted, prune, lastOwned, reason, stateFile)
     } catch (error) {
       ctx.logger.warn('[dsh-model-sync] %s sync failed: %s', reason,
         error instanceof Error ? error.message : String(error))
@@ -186,8 +219,7 @@ export function apply(ctx, config = {}) {
   // Each activation — the first boot or a manual re-enable from the Plugins
   // page — runs one sync once services are up.
   ctx.inject(['llm', 'settings'], (sctx) => {
-    const scope = sctx.settings.register(PROVENANCE_NS, PROVENANCE_SCHEMA)
-    const run = (reason) => syncOnce(scope, reason)
+    const run = (reason) => syncOnce(reason)
     const first = sctx.effect(() => {
       const timer = setTimeout(() => run('activation'), ACTIVATION_SYNC_DELAY_MS)
       return () => clearTimeout(timer)
@@ -209,29 +241,30 @@ export function apply(ctx, config = {}) {
  * @param ctx - host context carrying llm / settings services.
  * @param wanted - provider name filter, or null for every provider.
  * @param prune - whether to remove owned ids no longer advertised.
- * @param scope - the model-sync namespace scope (lastSync outcome).
  * @param lastOwned - owned ids seen at the previous sync, per provider.
  * @param reason - which trigger ran this pass ('activation' | 'interval').
  * @param stateFile - path of the plugin's rejection-baseline state file.
  */
-async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason, stateFile) {
+async function syncProviders(ctx, wanted, prune, lastOwned, reason, stateFile) {
   const llm = ctx.get('llm')
   const settings = ctx.get('settings')
   // Adopt a pre-0.7.0 document that still stored the rejection baseline in
   // the namespace: move it into the state file once, then strip the key so
-  // the settings document keeps only what the UI reads.
-  const legacy = settings.get(PROVENANCE_NS)
+  // the settings document keeps only what the UI reads. The plugin's own
+  // `providers` config is an array, so a legacy baseline is a non-array object.
+  const legacy = readSection(settings, PROVENANCE_NS)
   if (legacy !== null && typeof legacy === 'object' && legacy.providers !== null
-    && typeof legacy.providers === 'object') {
+    && typeof legacy.providers === 'object' && !Array.isArray(legacy.providers)) {
     const prior = await loadStateFile(stateFile)
     if (Object.keys(prior.providers).length === 0 && Object.keys(legacy.providers).length > 0) {
       await saveStateFile(stateFile, { providers: legacy.providers })
     }
-    await scope.replace(legacy.lastSync === undefined ? {} : { lastSync: legacy.lastSync })
+    await settings.replace(PROVENANCE_NS,
+      legacy.lastSync === undefined ? {} : { lastSync: legacy.lastSync })
   }
   const state = await loadStateFile(stateFile)
   const providerState = state.providers
-  const section = settings.get(SETTINGS_NS)
+  const section = readSection(settings, SETTINGS_NS)
   if (typeof section !== 'object' || section === null
     || typeof section.providers !== 'object' || section.providers === null) {
     ctx.logger.info('[dsh-model-sync] %s sync: no llm-pi-ai providers configured; nothing to sync', reason)
@@ -351,6 +384,6 @@ async function syncProviders(ctx, wanted, prune, scope, lastOwned, reason, state
     ? { at: new Date().toISOString(), providers: lastSyncProviders }
     : undefined
   if (lastSync !== undefined) {
-    await scope.replace({ lastSync })
+    await settings.replace(PROVENANCE_NS, { lastSync })
   }
 }
